@@ -524,9 +524,9 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
     msg = sv.Texture.from_surface(ren, pygame.font.Font(None, 56).render(
         "Waiting for the capture card / video signal...", True, (230, 230, 230)))
     font = pygame.font.Font(None, 44)
-    lines = ["The capture card is not getting a valid video signal.",
-             "Unplug and replug the HDMI cable between the dock and the card,",
-             "and check the Switch's video output (1080p, 60 Hz, HDR and VRR off)."]
+    lines = ["The capture card is sending its 'no valid video' pattern.",
+             "Most often fixed by unplugging the CARD's USB cable and plugging it back in.",
+             "If not: replug the HDMI cable, and check the Switch's video output (1080p, 60 Hz)."]
     surfs = [font.render(s, True, (240, 240, 240)) for s in lines]
     sw, sh_ = max(s.get_width() for s in surfs), sum(s.get_height() + 10 for s in surfs)
     big = pygame.Surface((sw, sh_), pygame.SRCALPHA)

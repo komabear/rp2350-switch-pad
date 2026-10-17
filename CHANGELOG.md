@@ -3,8 +3,9 @@
 ## Unreleased
 
 - The capture window recognises the card's own "no valid video signal" picture (vertical stripes, every
-  row identical) and shows an explanation instead of the stripes: replug the HDMI cable between the
-  dock and the card and check the Switch's video output. It also tries reopening the card now and then.
+  row identical) and shows an explanation instead of the stripes: replug the card's USB cable (that is
+  what fixed it in practice; the card had sat idle for two hours), else the HDMI cable, and check the
+  Switch's video output. It also tries reopening the card now and then.
 
 ## 0.1.3 - 2026-10-17
 
