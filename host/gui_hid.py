@@ -13,6 +13,8 @@ Setup order (the PIO link wedges if the native cable is changed while up):
 """
 import ctypes
 import json
+import logging
+import logging.handlers
 import os
 import sys
 import threading
@@ -51,7 +53,49 @@ def save_settings(d):
         pass
 
 
+LOG_PATH = os.path.join(os.path.dirname(SETTINGS_PATH), "gui.log")
+log = logging.getLogger("padbridge")
+
+
+def setup_logging():
+    """Small rotating log of link/board state changes, to diagnose freezes."""
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        h = logging.handlers.RotatingFileHandler(
+            LOG_PATH, maxBytes=200_000, backupCount=2, encoding="utf-8"
+        )
+        h.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        log.addHandler(h)
+        log.setLevel(logging.INFO)
+    except OSError:
+        pass
+
+
+def keep_process_responsive():
+    """Windows 11 throttles background/minimised apps (timers coarsen, CPU
+    drops to efficiency cores). The link needs steady 125 Hz traffic, so opt
+    out of power throttling and use 1 ms timers."""
+    try:
+        ctypes.windll.winmm.timeBeginPeriod(1)
+    except Exception:
+        pass
+    try:
+        class PPT(ctypes.Structure):
+            _fields_ = [("Version", ctypes.c_ulong),
+                        ("ControlMask", ctypes.c_ulong),
+                        ("StateMask", ctypes.c_ulong)]
+        k32 = ctypes.windll.kernel32
+        st = PPT(1, 0x1, 0x0)  # EXECUTION_SPEED throttling: controlled, OFF
+        k32.SetProcessInformation(
+            k32.GetCurrentProcess(), 4, ctypes.byref(st), ctypes.sizeof(st)
+        )
+        k32.SetPriorityClass(k32.GetCurrentProcess(), 0x8000)  # above normal
+    except Exception:
+        pass
+
+
 SLOTS = 4
+KEEPALIVE_S = 30  # idle seconds before a keep-alive nudge
 RATE_HZ = 125
 GUIDE = 0x0400  # only visible through the undocumented XInputGetStateEx
 
@@ -110,6 +154,7 @@ class Shared:
         self.manual_slot = 0
         self.send_enabled = True
         self.swap_abxy = False
+        self.keepalive = True
         self.home = False
         self.capture = False
         # outputs
@@ -148,6 +193,10 @@ def worker(sh):
     next_open = 0.0
     win_t, win_n = time.time(), 0
     last_ok = 0.0
+    prev_state = None
+    last_sig, last_input, last_nudge, nudge_left = None, time.time(), 0.0, 0
+    next_beat = 0.0
+    log.info("worker started")
 
     while not sh.stop.is_set():
         t0 = time.time()
@@ -163,6 +212,7 @@ def worker(sh):
             auto, manual = sh.mode_auto, sh.manual_slot
             enabled, home, cap = sh.send_enabled, sh.home, sh.capture
             swap = sh.swap_abxy
+            keepalive = sh.keepalive
         if auto:
             slot = next((s for s in range(SLOTS) if conn[s]), None)
         else:
@@ -182,6 +232,26 @@ def worker(sh):
             use = gp if (gp is not None and enabled) else bridge.NEUTRAL_GAMEPAD
             if swap and use is gp:
                 use = swap_abxy(gp)
+
+            # keep-alive: if nothing changed for KEEPALIVE_S, send a tiny input
+            # (3 frames of 10% right-stick) so neither the board nor the
+            # Switch ever sees a completely static pad
+            sig = None if gp is None else (
+                gp.wButtons, gp.bLeftTrigger >> 4, gp.bRightTrigger >> 4,
+                gp.sThumbLX >> 11, gp.sThumbLY >> 11,
+                gp.sThumbRX >> 11, gp.sThumbRY >> 11)
+            if sig != last_sig:
+                last_sig, last_input = sig, t0
+            if (keepalive and enabled and nudge_left == 0
+                    and t0 - last_input >= KEEPALIVE_S
+                    and t0 - last_nudge >= KEEPALIVE_S):
+                nudge_left, last_nudge = 3, t0
+            if nudge_left > 0:
+                nudge_left -= 1
+                out = bridge.XINPUT_GAMEPAD()
+                ctypes.pointer(out)[0] = use
+                out.sThumbRY = 3300  # ~10% of full scale
+                use = out
             frame = bridge.build_frame(
                 use, home=home or (guide and enabled), capture=cap
             )
@@ -231,10 +301,26 @@ def worker(sh):
                 sh.rate = win_n / (t0 - win_t)
                 win_t, win_n = t0, 0
 
+        # ---- log state changes + a once-a-minute heartbeat
+        with sh.lock:
+            b = sh.board
+            state = (dev is not None, sh.link_stuck, slot,
+                     None if b is None else (b["mounted"], b["suspended"], b["polling"]))
+            rate_now, sent_now, failed_now = sh.rate, sh.sent, sh.failed
+        if state != prev_state:
+            log.info("state link_open=%s stuck=%s slot=%s board(mounted,susp,polling)=%s "
+                     "rate=%.0f sent=%d failed=%d", *state, rate_now, sent_now, failed_now)
+            prev_state = state
+        if t0 >= next_beat:
+            next_beat = t0 + 60
+            log.info("heartbeat rate=%.0f sent=%d failed=%d late_ms=%.0f",
+                     rate_now, sent_now, failed_now, (t0 - win_t) * 1000)
+
         dt = period - (time.time() - t0)
         if dt > 0:
             time.sleep(dt)
 
+    log.info("worker stopping")
     if dev is not None:
         try:  # release everything before leaving
             dev.send_feature_report(
@@ -353,6 +439,13 @@ class App:
             bot, text="Switch AB/XY", variable=self.swap_var,
             command=self.apply_mode,
         ).pack(side="left", padx=(14, 0))
+        self.keep_var = tk.BooleanVar(
+            value=bool(load_settings().get("keepalive", True))
+        )
+        ttk.Checkbutton(
+            bot, text="Keep-alive (nudge after 30 s idle)", variable=self.keep_var,
+            command=self.apply_mode,
+        ).pack(side="left", padx=(14, 0))
         for name, attr in (("CAPTURE", "capture"), ("HOME", "home")):
             b = ttk.Button(bot, text=name, width=10)
             b.pack(side="right", padx=4)
@@ -376,7 +469,9 @@ class App:
             self.sh.manual_slot = idx if idx >= 0 else 0
             self.sh.send_enabled = self.send_var.get()
             self.sh.swap_abxy = self.swap_var.get()
-        save_settings({"swap_abxy": self.swap_var.get()})
+            self.sh.keepalive = self.keep_var.get()
+        save_settings({"swap_abxy": self.swap_var.get(),
+                       "keepalive": self.keep_var.get()})
 
     def refresh_combo(self, conn):
         cur = self.combo.current()
@@ -483,6 +578,9 @@ def main():
     if bridge.XINPUT is None:
         print("no XInput DLL found")
         sys.exit(1)
+    setup_logging()
+    keep_process_responsive()
+    log.info("GUI started")
     root = tk.Tk()
     App(root)
     root.mainloop()

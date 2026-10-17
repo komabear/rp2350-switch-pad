@@ -56,6 +56,10 @@ whole board (both ports) can freeze. Only unplugging **both** cables recovers it
 - Status lights: controller on the PC, link to the board, *Switch is reading the pad*, inputs flowing.
 - **Switch AB/XY** (default on, remembered): swaps A↔B and X↔Y so an Xbox pad's physical layout
   matches a Switch pad. Settings live in `%APPDATA%\mayflash_switch2_controller\gui_settings.json`.
+- **Keep-alive** (default on, remembered): after 30 s with no change on the pad, sends a 3-frame,
+  ~10% right-stick nudge so the pad is never completely static. Untick it if a game reacts to it.
+- A small log of link/board state changes is written to
+  `%APPDATA%\mayflash_switch2_controller\gui.log` (useful when the link freezes).
 - HOME / CAPTURE are press-and-hold buttons. The Xbox Guide button maps to HOME when Windows
   exposes it.
 
