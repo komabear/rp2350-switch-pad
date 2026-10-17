@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.3 - 2026-10-17
+
+- **Fixed the capture card dropping out during play.** The GUI listed all HID devices every 1-3 s to
+  name the controllers, which made Windows query every USB device, including the capture card;
+  the card then collapsed to 1-2 fps for several seconds, up to three times in two minutes. The
+  listing now happens every 30 s (and the "pad port is in this PC" check only while the board link
+  is down). A 57-minute session afterwards had no collapse at all.
+- The capture window writes `%APPDATA%\mayflash_switch2_controller\capture.log` (problems, recoveries, a
+  once-a-minute heartbeat; a short black fade is not counted as a problem) and reopens the card when
+  its frame rate collapses for 2 s.
+- The "link not responding" hint now says to replug only the PIO cable first (that is usually enough).
+- No firmware changes (`bridge.uf2` is identical to 0.1.0 - 0.1.2).
+
 ## 0.1.2 - 2026-10-17
 
 - Capture window volume: slider in the GUI (0-100%, where 100% = 10x gain; default 50%, remembered,
@@ -17,9 +30,6 @@
   mode change) or the picture stays completely black for 10 s, it reopens the card; while the card
   cannot be opened it keeps retrying and shows "Waiting for the capture card / video signal..." instead
   of exiting or freezing on the last frame.
-- The capture window writes `%APPDATA%\mayflash_switch2_controller\capture.log` (problems, recoveries, a
-  once-a-minute heartbeat) and also reopens the card when its frame rate collapses to a crawl (the
-  UGREEN card falls to ~1 fps when its HDMI input drops).
 - The capture panel warns when Windows' own recording level for the card is low (the UGREEN card
   defaulted to 17%, which made it very quiet). Setting it to 100% in Settings > System > Sound > Input
   is the best fix; the slider is the second step.
