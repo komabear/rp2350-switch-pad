@@ -148,18 +148,20 @@ def clog(msg):
 def grab_loop(cap, vidx, w, h, fps, slot, stop):
     """Read frames into `slot` and keep the card healthy. Reopens it by itself when
       - no frame arrives for 2 s (stall after an HDMI mode change),
-      - the frame rate stays under 20 fps for 3 s (the card falls to ~1 fps when its input drops),
+      - the frame rate stays under 20 fps for 2 s (the card falls to ~1 fps when its input drops),
       - the picture stays completely black for 10 s,
     (rate-limited), and keeps retrying while the card cannot be opened. Everything notable is
     written to capture.log."""
     now = time.time()
     last_ok, last_reopen, t_sec, n_sec, n = now, 0.0, now, 0, 0
+    fresh_reopen = False
     t_open = now  # warm-up: the card needs ~2 s after opening before the rate means anything
     bright, low_secs, black_secs, bad, t_beat = 255.0, 0, 0, False, now
     clog(f"capture loop started (device {vidx}, {w}x{h}@{fps})")
     while not stop.is_set():
         if cap is None:
-            stop.wait(1.0)
+            stop.wait(0.3 if fresh_reopen else 1.0)  # first retry quickly, then every second
+            fresh_reopen = False
             cap = open_capture(vidx, w, h, fps)
             last_ok, t_sec, n_sec, low_secs, black_secs = time.time(), time.time(), 0, 0, 0
             t_open = time.time()
@@ -193,7 +195,7 @@ def grab_loop(cap, vidx, w, h, fps, slot, stop):
             if now - t_beat >= 60:
                 t_beat = now
                 clog(f"ok: {rate:.0f} fps, brightness {bright:.0f}")
-            if low_secs >= 3 and now - last_reopen > 15:
+            if low_secs >= 2 and now - last_reopen > 15:
                 reason = f"frame rate collapsed ({rate:.0f} fps)"
             elif black_secs >= 10 and now - last_reopen > 60:
                 reason = "picture black for 10 s"
@@ -203,7 +205,7 @@ def grab_loop(cap, vidx, w, h, fps, slot, stop):
             print(f"INFO capture reopening: {reason}", file=sys.stderr, flush=True)
             clog(f"reopening the card: {reason}")
             cap.release()
-            cap, last_reopen, low_secs, black_secs = None, now, 0, 0
+            cap, last_reopen, low_secs, black_secs, fresh_reopen = None, now, 0, 0, True
 
 
 def input_level(hint):
