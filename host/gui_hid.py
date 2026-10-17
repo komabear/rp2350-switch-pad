@@ -778,8 +778,9 @@ class App:
         elif not link:
             h = "Plug the board's PIO-USB Type-C cable into this PC."
         elif stuck:
-            h = ("The link is frozen. Close this window, unplug BOTH board cables, wait 5 s, "
-                 "then: native cable -> dock first, PIO cable -> PC last, and reopen this.")
+            h = ("The link is not responding (it goes idle when nothing talks to it). Unplug ONLY the "
+                 "PIO cable (the one to this PC), wait 3 s, plug it back in; this window reconnects by "
+                 "itself. If that does not help, unplug both cables and redo the connect order.")
         elif board is not None and age <= 3.0 and not board["mounted"]:
             h = ("The Switch has not detected the pad. If the console is asleep this is normal: "
                  "wake it, wait ~10 s and press a button on your pad. Otherwise: Check the board's native "

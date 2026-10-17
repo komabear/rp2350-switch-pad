@@ -50,7 +50,7 @@ Disconnect:
 
 Never plug the PIO cable in before the native cable or leave it plugged into an idle board: the
 whole board (both ports) can freeze. Only unplugging **both** cables recovers it. If the GUI says
-"found but not responding", unplug both, wait 5 s, and redo the connect steps.
+"found but not responding" (the link goes idle whenever nothing talks to it, e.g. after you closed the GUI for a while): unplug only the PIO cable, wait 3 s, plug it back in; the GUI reconnects by itself. If that does not help, unplug both cables, wait 5 s, and redo the connect steps.
 
 ## The GUI (`host/gui_hid.py`)
 
