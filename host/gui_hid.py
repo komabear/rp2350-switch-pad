@@ -155,6 +155,7 @@ class Shared:
         self.send_enabled = True
         self.swap_abxy = False
         self.keepalive = True
+        self.pad_on_pc = False  # the board's pad port is plugged into THIS PC
         self.home = False
         self.capture = False
         # outputs
@@ -195,6 +196,7 @@ def worker(sh):
     last_ok = 0.0
     prev_state = None
     last_sig, last_input, last_nudge, nudge_left = None, time.time(), 0.0, 0
+    next_enum = 0.0
     next_beat = 0.0
     log.info("worker started")
 
@@ -289,6 +291,15 @@ def worker(sh):
                 dev = None
                 next_open = t0 + 1.0
                 consec_fail = 0
+
+        if t0 >= next_enum:  # is the pad port plugged into this PC by mistake?
+            next_enum = t0 + 1.0
+            try:
+                on_pc = bool(hid.enumerate(0x20D6, 0xA713))
+            except Exception:
+                on_pc = False
+            with sh.lock:
+                sh.pad_on_pc = on_pc
 
         with sh.lock:
             sh.connected = conn
@@ -504,6 +515,7 @@ class App:
             link, stuck = sh.link_open, sh.link_stuck
             rate, sent, failed = sh.rate, sh.sent, sh.failed
             board, age = sh.board, sh.board_age
+            pad_on_pc = sh.pad_on_pc
             auto = sh.mode_auto
         self.refresh_combo(conn)
 
@@ -524,7 +536,9 @@ class App:
             self.dot("link", OKC, f"connected ({rate:.0f} frames/s)")
 
         # switch
-        if not link or stuck or board is None or age > 3.0:
+        if pad_on_pc:
+            self.dot("switch", BADC, "pad port is plugged into THIS PC")
+        elif not link or stuck or board is None or age > 3.0:
             self.dot("switch", IDLEC, "unknown (no board status)")
         elif board["polling"] or (board["polling"] is None and board["mounted"]
                                   and not board["suspended"]):
@@ -542,7 +556,11 @@ class App:
             self.dot("flow", IDLEC, "-")
 
         # hint: the next thing the user should do
-        if not link:
+        if pad_on_pc:
+            h = ("The board's native (programming) cable is in this PC, so the Switch can't "
+                 "see the pad. Close this window, unplug both cables, then: native -> DOCK "
+                 "first (wait 10 s), PIO -> PC last.")
+        elif not link:
             h = "Plug the board's PIO-USB Type-C cable into this PC."
         elif stuck:
             h = ("The link is frozen. Close this window, unplug BOTH board cables, wait 5 s, "
