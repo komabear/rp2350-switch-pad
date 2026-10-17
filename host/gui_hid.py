@@ -108,9 +108,76 @@ if bridge.XINPUT is not None:
     try:  # ordinal 100 = XInputGetStateEx (includes the Guide button)
         _getex = ctypes.WINFUNCTYPE(
             ctypes.c_uint32, ctypes.c_uint32, ctypes.POINTER(bridge.XINPUT_STATE)
-        )(100, bridge.XINPUT)
+        )((100, bridge.XINPUT))
     except Exception:
         _getex = None
+
+
+class _Caps(ctypes.Structure):
+    _fields_ = [("Type", ctypes.c_ubyte), ("SubType", ctypes.c_ubyte),
+                ("Flags", ctypes.c_uint16), ("Gamepad", bridge.XINPUT_GAMEPAD),
+                ("LeftMotor", ctypes.c_uint16), ("RightMotor", ctypes.c_uint16)]
+
+
+class _CapsEx(ctypes.Structure):
+    _fields_ = [("Caps", _Caps), ("vendorId", ctypes.c_uint16),
+                ("productId", ctypes.c_uint16), ("revisionId", ctypes.c_uint16),
+                ("a4", ctypes.c_uint32)]
+
+
+_getcapsex = None
+if bridge.XINPUT is not None:
+    try:  # ordinal 108 = XInputGetCapabilitiesEx (adds the USB vendor/product id)
+        _getcapsex = ctypes.WINFUNCTYPE(
+            ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32,
+            ctypes.POINTER(_CapsEx),
+        )((108, bridge.XINPUT))
+    except Exception:
+        _getcapsex = None
+
+# names for ids Windows lists no HID entry for (virtual pads such as Parsec's / ViGEm's)
+KNOWN_PADS = {
+    (0x045E, 0x028E): "Controller (XBOX 360 For Windows)",
+    (0x045E, 0x02FF): "Controller (Xbox One For Windows)",
+    (0x045E, 0x02D1): "Controller (Xbox One For Windows)",
+    (0x045E, 0x02DD): "Controller (Xbox One For Windows)",
+    (0x045E, 0x02E3): "Xbox One Elite Controller",
+    (0x045E, 0x0B12): "Xbox Series Controller",
+    (0x045E, 0x0B13): "Xbox Series Controller",
+}
+
+
+def slot_ident(slot):
+    """-> (vendor_id, product_id) of the pad in an XInput slot, or None."""
+    if _getcapsex is None:
+        return None
+    c = _CapsEx()
+    if _getcapsex(1, slot, 0, ctypes.byref(c)) != 0:
+        return None
+    return c.vendorId, c.productId
+
+
+def build_labels(connected):
+    """One readable line per XInput slot, using the names Windows reports."""
+    names = {}
+    try:
+        for d in hid.enumerate(0, 0):
+            if d["product_string"] and (d["vendor_id"], d["product_id"]) not in names:
+                names[(d["vendor_id"], d["product_id"])] = d["product_string"]
+    except Exception:
+        pass
+    labels = []
+    for s in range(SLOTS):
+        if not connected[s]:
+            labels.append(f"{s + 1}: (not connected)")
+            continue
+        ident = slot_ident(s)
+        if ident is None:
+            labels.append(f"{s + 1}: Xbox-compatible controller")
+            continue
+        name = names.get(ident) or KNOWN_PADS.get(ident) or "Xbox-compatible controller"
+        labels.append(f"{s + 1}: {name}  [{ident[0]:04X}:{ident[1]:04X}]")
+    return labels
 
 
 def read_pad(slot):
@@ -163,6 +230,8 @@ class Shared:
         self.capture = False
         # outputs
         self.connected = [False] * SLOTS
+        self.labels = [f"{i + 1}: (not connected)" for i in range(SLOTS)]
+        self.last_active = [0.0] * SLOTS
         self.active_slot = None
         self.gamepad = None
         self.link_open = False
@@ -188,6 +257,12 @@ def parse_board(r):
     return None
 
 
+def _refresh_labels(sh, conn):
+    labels = build_labels(conn)
+    with sh.lock:
+        sh.labels = labels
+
+
 def worker(sh):
     dev = None
     seq = 0
@@ -198,6 +273,7 @@ def worker(sh):
     win_t, win_n = time.time(), 0
     last_ok = 0.0
     prev_state = None
+    slot_sigs, prev_conn, next_labels = [None] * SLOTS, None, 0.0
     last_sig, last_input, last_nudge, nudge_left = None, time.time(), 0.0, 0
     next_enum = 0.0
     next_beat = 0.0
@@ -213,6 +289,18 @@ def worker(sh):
             gp, guide = read_pad(s)
             conn.append(gp is not None)
             pads[s] = (gp, guide)
+            asig = None if gp is None else (
+                gp.wButtons, gp.bLeftTrigger >> 4, gp.bRightTrigger >> 4,
+                gp.sThumbLX >> 11, gp.sThumbLY >> 11, gp.sThumbRX >> 11, gp.sThumbRY >> 11)
+            if asig != slot_sigs[s]:
+                if slot_sigs[s] is not None and asig is not None:
+                    with sh.lock:
+                        sh.last_active[s] = t0
+                slot_sigs[s] = asig
+        if conn != prev_conn or t0 >= next_labels:
+            next_labels = t0 + 3.0
+            prev_conn = list(conn)
+            threading.Thread(target=_refresh_labels, args=(sh, list(conn)), daemon=True).start()
         with sh.lock:
             auto, manual = sh.mode_auto, sh.manual_slot
             enabled, home, cap = sh.send_enabled, sh.home, sh.capture
@@ -380,14 +468,24 @@ class App:
         ).grid(row=1, column=0, sticky="w", padx=8, pady=2)
         self.slot_var = tk.StringVar()
         self.combo = ttk.Combobox(
-            box, textvariable=self.slot_var, state="readonly", width=34
+            box, textvariable=self.slot_var, state="readonly", width=58
         )
         self.combo.grid(row=1, column=1, padx=6, pady=2)
         self.combo.bind("<<ComboboxSelected>>", lambda e: self.apply_mode())
         self.using_var = tk.StringVar()
         ttk.Label(box, textvariable=self.using_var).grid(
-            row=2, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 6)
+            row=2, column=0, columnspan=2, sticky="w", padx=8, pady=(2, 2)
         )
+        # one box per XInput slot: grey = empty, white = connected, green = input right now
+        self.slot_cv = tk.Canvas(box, width=330, height=22, highlightthickness=0)
+        self.slot_cv.grid(row=3, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 6))
+        self.slot_boxes = []
+        for i in range(SLOTS):
+            r = self.slot_cv.create_rectangle(i * 82, 1, i * 82 + 78, 21, fill="#e6e6e6", outline="#aaa")
+            tx = self.slot_cv.create_text(i * 82 + 39, 11, text=f"{i + 1}", font=("Segoe UI", 8))
+            self.slot_boxes.append((r, tx))
+        ttk.Label(box, text="(press a button on a pad: its box turns green)",
+                  foreground="#777777").grid(row=3, column=1, sticky="e", padx=8)
 
         # ---- status checklist
         st = ttk.LabelFrame(root, text="Status")
@@ -517,12 +615,9 @@ class App:
         save_settings({"swap_abxy": self.swap_var.get(),
                        "keepalive": self.keep_var.get()})
 
-    def refresh_combo(self, conn):
+    def refresh_combo(self, conn, labels=None):
         cur = self.combo.current()
-        vals = [
-            f"Controller {i + 1}  -  {'connected' if conn[i] else 'not connected'}"
-            for i in range(SLOTS)
-        ]
+        vals = list(labels) if labels else [f"{i + 1}: (not connected)" for i in range(SLOTS)]
         if list(self.combo["values"]) != vals:
             self.combo["values"] = vals
         self.combo.current(cur if cur >= 0 else 0)
@@ -596,15 +691,23 @@ class App:
             board, age = sh.board, sh.board_age
             pad_on_pc = sh.pad_on_pc
             auto = sh.mode_auto
-        self.refresh_combo(conn)
+            labels = list(sh.labels)
+            active = list(sh.last_active)
+        self.refresh_combo(conn, labels)
+        now_t = time.time()
+        for i, (r, tx) in enumerate(self.slot_boxes):
+            fill = "#7fd68f" if conn[i] and now_t - active[i] < 1.5 else (
+                "#ffffff" if conn[i] else "#e6e6e6")
+            self.slot_cv.itemconfig(r, fill=fill)
 
         # controller
         if slot is None:
             self.using_var.set("Using: none" if auto else "Using: (picked controller is not connected)")
             self.dot("pad", BADC, "none found" if auto else "picked one not connected")
         else:
-            self.using_var.set(f"Using: Controller {slot + 1}")
-            self.dot("pad", OKC, f"Controller {slot + 1}")
+            nm = labels[slot].split(": ", 1)[1] if ": " in labels[slot] else labels[slot]
+            self.using_var.set(f"Using: {nm}  (slot {slot + 1})")
+            self.dot("pad", OKC, nm.split("  [")[0][:34])
 
         # link
         if not link:
