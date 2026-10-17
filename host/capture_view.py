@@ -276,8 +276,11 @@ class Viewer:
         if not video:
             self.error = "no video device selected"
             return False
-        cmd = [sys.executable, HERE, "--video-index", str(video_index(video, video_names)),
-               "--audio", audio or "", "--mode", mode]
+        # frozen (PyInstaller) build: relaunch this same exe in viewer mode
+        base = ([sys.executable, "--capture-view"] if getattr(sys, "frozen", False)
+                else [sys.executable, HERE])
+        cmd = base + ["--video-index", str(video_index(video, video_names)),
+                      "--audio", audio or "", "--mode", mode]
         if mute_audio or not audio:
             cmd.append("--no-audio")
         self.lines, self.error, self.stats = [], "", ""

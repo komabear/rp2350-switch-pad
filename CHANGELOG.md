@@ -13,6 +13,8 @@ First complete version.
   state log in `%APPDATA%\mayflash_switch2_controller\gui.log`.
 - **Capture card window:** low-latency video and audio from an HDMI capture card (UGREEN HDMI
   Capture tested) in a window you can share in Parsec, Discord or OBS; vsync, no tearing.
+- **Release bundle:** `tools/build_release.py` builds a Windows exe (PyInstaller) of the GUI and zips
+  it with `bridge.uf2`.
 - **Tools:** `tools/link_test.py`, `tools/board_diag.py`, `tools/tear_check.py`.
 
 ### Known limitations

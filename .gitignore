@@ -22,3 +22,8 @@ host/*
 !host/capture_view.py
 !host/gui_hid.py
 !host/requirements.txt
+
+# release build output
+dist/
+release/
+build-exe/

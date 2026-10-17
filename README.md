@@ -77,6 +77,16 @@ whole board (both ports) can freeze. Only unplugging **both** cables recovers it
 
 Headless alternative: `py host/bridge_hid.py` (or `--demo` to cycle the d-pad without a gamepad).
 
+## Download (no Python needed)
+
+The GitHub release page has `rp2350-switch-pad-v<version>-windows.zip`: the GUI as a Windows exe
+(unzip and run `rp2350-switch-pad.exe`; Windows SmartScreen may warn because it is unsigned) plus
+`bridge.uf2`, the board firmware. Flash the UF2 (see *Flash* below), then follow the daily routine.
+The capture window uses `ffmpeg` only to list device names (`winget install Gyan.FFmpeg`).
+
+Build the bundle yourself: build the firmware, `py -m pip install pyinstaller`, then
+`py tools/build_release.py` (output in `release/`).
+
 ## Setup
 
 ```

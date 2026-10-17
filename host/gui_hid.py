@@ -97,6 +97,8 @@ def keep_process_responsive():
         pass
 
 
+__version__ = "0.1.0"
+
 SLOTS = 4
 KEEPALIVE_S = 30  # idle seconds before a keep-alive nudge
 RATE_HZ = 125
@@ -446,7 +448,7 @@ OKC, BADC, WARNC, IDLEC = "#2e9e4f", "#cc3333", "#d89a1e", "#888888"
 class App:
     def __init__(self, root):
         self.root = root
-        root.title("Switch 2 Remote Pad Bridge")
+        root.title(f"Switch 2 Remote Pad Bridge  v{__version__}")
         root.resizable(False, False)
         self.sh = Shared()
         self.worker = threading.Thread(target=worker, args=(self.sh,), daemon=True)
@@ -779,7 +781,42 @@ class App:
         self.root.after(80, self.tick)
 
 
+def self_check():
+    """Smoke test for packaged builds (no board / capture card needed). The result goes to
+    check.txt next to gui.log because a windowed exe has no console."""
+    path = os.path.join(os.path.dirname(SETTINGS_PATH), "check.txt")
+    try:
+        import sounddevice as sd
+        import cv2
+        import pygame
+        from pygame._sdl2 import video as sv  # noqa: F401
+        root = tk.Tk()
+        root.withdraw()
+        root.destroy()
+        hid.enumerate(0, 0)
+        sd.query_devices()
+        msg = (f"OK v{__version__}: tkinter, hidapi, opencv {cv2.__version__}, "
+               f"pygame-ce {pygame.version.ver}, sounddevice, xinput "
+               f"{'yes' if bridge.XINPUT is not None else 'NO'}")
+        code = 0
+    except Exception as e:  # report instead of a blocking crash dialog
+        msg, code = f"FAILED: {type(e).__name__}: {e}", 1
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(msg + "\n")
+    except OSError:
+        pass
+    print(msg)
+    return code
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--capture-view":
+        sys.argv = [sys.argv[0]] + sys.argv[2:]
+        sys.exit(cap.main())
+    if len(sys.argv) > 1 and sys.argv[1] == "--check":
+        sys.exit(self_check())
     if bridge.XINPUT is None:
         print("no XInput DLL found")
         sys.exit(1)
