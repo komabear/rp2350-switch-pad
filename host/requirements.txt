@@ -1,2 +1,6 @@
 hidapi
 pyserial
+opencv-python
+numpy
+sounddevice
+pygame-ce

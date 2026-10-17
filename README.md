@@ -56,6 +56,12 @@ whole board (both ports) can freeze. Only unplugging **both** cables recovers it
 - Status lights: controller on the PC, link to the board, *Switch is reading the pad*, inputs flowing.
 - **Switch AB/XY** (default on, remembered): swaps A↔B and X↔Y so an Xbox pad's physical layout
   matches a Switch pad. Settings live in `%APPDATA%\mayflash_switch2_controller\gui_settings.json`.
+- **Capture card window** (UGREEN HDMI Capture or any DirectShow card): opens a low-latency window with
+  video and audio that you can share in Parsec, Discord or OBS. Frames are drawn on the GPU with vsync
+  (no tearing), only the newest frame is ever shown (no queueing), audio goes through a small WASAPI
+  buffer. Keys in the window: `f` fullscreen, `m` mute, `q`/`Esc` close. It needs
+  `ffmpeg` only to list device names (`winget install Gyan.FFmpeg`). Standalone:
+  `py host/capture_view.py --video-index 1 --audio "<audio device name>"`.
 - **Keep-alive** (default on, remembered): after 30 s with no change on the pad, sends a 3-frame,
   ~10% right-stick nudge so the pad is never completely static. Untick it if a game reacts to it.
 - **Console sleep:** the Switch cuts and restores dock USB power, so the board re-presents its USB
@@ -96,6 +102,7 @@ Plug the **native** port into the PC, hold **BOOT**, tap **RST**, copy `fw/build
 
 ## Troubleshooting / diagnostics
 
+- `py tools/tear_check.py`: records ~5 s from the capture card during motion and counts torn/duplicate frames.
 - `py tools/link_test.py`: writes frames to the PIO link and reports successes/failures
   (note: `hidapi` returns `-1` on failure instead of raising).
 - `py tools/board_diag.py`: reads crash registers, core-1 heartbeat and frame counters from the

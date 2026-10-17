@@ -26,6 +26,7 @@ try:
     import hid
     import bridge
     import bridge_hid as bh
+    import capture_view as cap
 except ImportError as e:
     print(f"import error: {e}\nrun: python -m pip install hidapi pyserial")
     sys.exit(1)
@@ -47,8 +48,10 @@ def load_settings():
 def save_settings(d):
     try:
         os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+        cur = load_settings()
+        cur.update(d)
         with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
-            json.dump(d, f)
+            json.dump(cur, f)
     except OSError:
         pass
 
@@ -434,9 +437,39 @@ class App:
         self.cv.create_text(260, 76, text="ZL", font=("Segoe UI", 8))
         self.cv.create_text(260, 94, text="ZR", font=("Segoe UI", 8))
 
+        # ---- capture card window
+        cf = ttk.LabelFrame(root, text="Capture card window (share it in Parsec / Discord)")
+        cf.grid(row=3, column=0, sticky="we", **pad)
+        s = load_settings()
+        self.viewer = cap.Viewer()
+        self.video_names = []
+        self.cap_video = tk.StringVar(value=s.get("cap_video", ""))
+        self.cap_audio = tk.StringVar(value=s.get("cap_audio", ""))
+        self.cap_mode = tk.StringVar(value=s.get("cap_mode", cap.DEFAULT_MODE))
+        ttk.Label(cf, text="Video:").grid(row=0, column=0, sticky="e", padx=(8, 4), pady=2)
+        self.cap_video_cb = ttk.Combobox(cf, textvariable=self.cap_video, width=44, state="readonly")
+        self.cap_video_cb.grid(row=0, column=1, columnspan=2, sticky="w", pady=2)
+        ttk.Label(cf, text="Audio:").grid(row=1, column=0, sticky="e", padx=(8, 4), pady=2)
+        self.cap_audio_cb = ttk.Combobox(cf, textvariable=self.cap_audio, width=44, state="readonly")
+        self.cap_audio_cb.grid(row=1, column=1, columnspan=2, sticky="w", pady=2)
+        ttk.Label(cf, text="Quality:").grid(row=2, column=0, sticky="e", padx=(8, 4), pady=2)
+        ttk.Combobox(
+            cf, textvariable=self.cap_mode, width=14, state="readonly",
+            values=list(cap.MODES),
+        ).grid(row=2, column=1, sticky="w", pady=2)
+        self.cap_btn = ttk.Button(cf, text="Open capture window", width=22, command=self.toggle_capture)
+        self.cap_btn.grid(row=2, column=2, sticky="e", padx=8, pady=2)
+        self.cap_status = tk.StringVar(value="Looking for capture devices...")
+        ttk.Label(cf, textvariable=self.cap_status, wraplength=470, foreground="#555555").grid(
+            row=3, column=0, columnspan=3, sticky="w", padx=8, pady=(2, 6)
+        )
+        for v in (self.cap_video_cb, self.cap_audio_cb):
+            v.bind("<<ComboboxSelected>>", lambda e: self.save_capture())
+        threading.Thread(target=self.load_devices, daemon=True).start()
+
         # ---- bottom row
         bot = ttk.Frame(root)
-        bot.grid(row=3, column=0, sticky="we", **pad)
+        bot.grid(row=4, column=0, sticky="we", **pad)
         self.send_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             bot, text="Send inputs to Switch", variable=self.send_var,
@@ -499,7 +532,53 @@ class App:
         c.itemconfig(item, fill=color)
         self.texts[key].set(text)
 
+    # ---- capture window
+    def load_devices(self):
+        video, audio = cap.list_devices()
+        self.root.after(0, lambda: self.fill_devices(video, audio))
+
+    def fill_devices(self, video, audio):
+        self.video_names = video
+        self.cap_video_cb["values"] = video
+        self.cap_audio_cb["values"] = audio
+        if self.cap_video.get() not in video:
+            self.cap_video.set(cap.pick_default(video))
+        if self.cap_audio.get() not in audio:
+            self.cap_audio.set(cap.pick_default(audio))
+        if not video:
+            self.cap_status.set("No capture device found. Is ffmpeg installed "
+                                "(winget install Gyan.FFmpeg) and the card plugged in?")
+        else:
+            self.cap_status.set("Ready. In the window: f = fullscreen, m = mute, q = close.")
+
+    def save_capture(self):
+        save_settings({"cap_video": self.cap_video.get(),
+                       "cap_audio": self.cap_audio.get(),
+                       "cap_mode": self.cap_mode.get()})
+
+    def toggle_capture(self):
+        if self.viewer.running():
+            self.viewer.stop()
+            return
+        self.save_capture()
+        if not self.viewer.start(self.video_names, self.cap_video.get(),
+                                 self.cap_audio.get(), self.cap_mode.get()):
+            self.cap_status.set("Could not start: " + self.viewer.error)
+
+    def update_capture(self):
+        state, msg = self.viewer.state()
+        if state == "running":
+            self.cap_btn.config(text="Close capture window")
+            self.cap_status.set(
+                "Capture window is open (" + (msg or "starting...") + "). "
+                "In it: f = fullscreen, m = mute, q = close.")
+        else:
+            self.cap_btn.config(text="Open capture window")
+            if state == "failed":
+                self.cap_status.set("Capture stopped: " + msg)
+
     def close(self):
+        self.viewer.stop()
         # let the worker finish its in-flight transfer and close the device
         # before the process exits (killing it mid-transfer wedges the link)
         self.sh.stop.set()
@@ -595,6 +674,7 @@ class App:
             y0 = 70 + k * 18
             self.cv.coords(self.trig[k], 10, y0, 10 + v / 255 * 230, y0 + 12)
 
+        self.update_capture()
         self.root.after(80, self.tick)
 
 

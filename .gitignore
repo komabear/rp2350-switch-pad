@@ -19,5 +19,6 @@ third_party/
 host/*
 !host/bridge.py
 !host/bridge_hid.py
+!host/capture_view.py
 !host/gui_hid.py
 !host/requirements.txt
