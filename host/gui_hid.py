@@ -484,8 +484,6 @@ class App:
             r = self.slot_cv.create_rectangle(i * 82, 1, i * 82 + 78, 21, fill="#e6e6e6", outline="#aaa")
             tx = self.slot_cv.create_text(i * 82 + 39, 11, text=f"{i + 1}", font=("Segoe UI", 8))
             self.slot_boxes.append((r, tx))
-        ttk.Label(box, text="(press a button on a pad: its box turns green)",
-                  foreground="#777777").grid(row=3, column=1, sticky="e", padx=8)
 
         # ---- status checklist
         st = ttk.LabelFrame(root, text="Status")
