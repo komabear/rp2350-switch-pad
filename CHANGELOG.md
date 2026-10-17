@@ -13,6 +13,10 @@
   (vsync wait, texture upload) starved the audio callbacks: ~80-120 audible cuts per 30 s while
   drawing 1080p, worse when the window lost focus or went fullscreen; 0 cuts measured with the
   separate process, and the drawing also got smoother.
+- The capture window now recovers by itself: if no frame arrives for 2 s (the card stalls after an HDMI
+  mode change) or the picture stays completely black for 10 s, it reopens the card; while the card
+  cannot be opened it keeps retrying and shows "Waiting for the capture card / video signal..." instead
+  of exiting or freezing on the last frame.
 - The capture panel warns when Windows' own recording level for the card is low (the UGREEN card
   defaulted to 17%, which made it very quiet). Setting it to 100% in Settings > System > Sound > Input
   is the best fix; the slider is the second step.

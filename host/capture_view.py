@@ -108,13 +108,52 @@ class LatestFrame:
             return self.frame, self.t, self.n
 
 
-def grab_loop(cap, slot, stop):
+def open_capture(vidx, w, h, fps):
+    cap = cv2.VideoCapture(vidx, cv2.CAP_DSHOW)
+    if not cap.isOpened():
+        cap.release()
+        return None
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"YUY2"))
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+    cap.set(cv2.CAP_PROP_FPS, fps)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    return cap
+
+
+def grab_loop(cap, vidx, w, h, fps, slot, stop):
+    """Read frames into `slot`. Reopens the card by itself when the stream stalls (no frame for 2 s,
+    as happens after an HDMI mode change) or when the picture stays completely black for 10 s
+    (at most once a minute), and keeps retrying while the card cannot be opened."""
+    last_ok, black_since, last_black_reopen, n = time.time(), None, 0.0, 0
     while not stop.is_set():
+        if cap is None:
+            stop.wait(1.0)
+            cap = open_capture(vidx, w, h, fps)
+            last_ok, black_since = time.time(), None
+            if cap is not None:
+                print("INFO capture device reopened", file=sys.stderr, flush=True)
+            continue
         ok, f = cap.read()
+        now = time.time()
+        reopen = False
         if ok:
+            last_ok = now
             slot.put(f)
+            n += 1
+            if n % 30 == 0:  # twice a second: is the picture entirely black?
+                if f[::64, ::64].mean() < 1.5:
+                    black_since = black_since or now
+                else:
+                    black_since = None
+                if black_since and now - black_since > 10 and now - last_black_reopen > 60:
+                    last_black_reopen, black_since, reopen = now, None, True
         else:
             time.sleep(0.005)
+        if reopen or now - last_ok > 2.0:
+            print("INFO capture stalled or black, reopening", file=sys.stderr, flush=True)
+            cap.release()
+            cap = None
 
 
 def input_level(hint):
@@ -367,16 +406,13 @@ def run_audio_only(hint, volume):
 
 def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
     w, h, fps = MODES.get(mode, MODES[DEFAULT_MODE])
-    cap = cv2.VideoCapture(vidx, cv2.CAP_DSHOW)
-    if not cap.isOpened():
-        print(f"ERROR could not open capture device {vidx} (in use by another app?)", file=sys.stderr)
-        return 2
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"YUY2"))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
-    cap.set(cv2.CAP_PROP_FPS, fps)
-    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    got = (int(cap.get(3)), int(cap.get(4)))
+    cap = open_capture(vidx, w, h, fps)
+    if cap is None:
+        print(f"WARN could not open capture device {vidx} (in use by another app, or the card "
+              "is not responding): retrying", file=sys.stderr, flush=True)
+        got = (w, h)
+    else:
+        got = (int(cap.get(3)), int(cap.get(4)))
     print(f"INFO video {got[0]}x{got[1]} requested {w}x{h}@{fps}", file=sys.stderr, flush=True)
 
     boost_process()
@@ -401,7 +437,7 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
         threading.Thread(target=read_commands, daemon=True).start()
 
     slot, stop = LatestFrame(), threading.Event()
-    threading.Thread(target=grab_loop, args=(cap, slot, stop), daemon=True).start()
+    threading.Thread(target=grab_loop, args=(cap, vidx, w, h, fps, slot, stop), daemon=True).start()
 
     # GPU renderer with vsync (OpenCV's own window has no vsync -> tearing in fullscreen)
     import pygame
@@ -411,6 +447,10 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
     ren = sv.Renderer(win, vsync=True)
     tex = sv.Texture(ren, got, streaming=True)
     ren.draw_color = (0, 0, 0, 255)
+    pygame.font.init()
+    msg = sv.Texture.from_surface(ren, pygame.font.Font(None, 56).render(
+        "Waiting for the capture card / video signal...", True, (230, 230, 230)))
+    last_frame_t = time.time()
     last_n, shown, t_stat, age_sum = 0, 0, time.time(), 0.0
     fullscreen, running, code = False, True, 0
     while running:
@@ -421,6 +461,7 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
                 surf = pygame.image.frombuffer(frame.data, got, "BGR")
                 tex.update(surf)
             shown += 1
+            last_frame_t = time.time()
             age_sum += (time.perf_counter() - t_frame) * 1000
         for e in pygame.event.get():
             if e.type in (pygame.QUIT, pygame.WINDOWCLOSE):
@@ -446,7 +487,11 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
         sc = min(ww / got[0], wh / got[1])
         dw, dh = int(got[0] * sc), int(got[1] * sc)
         ren.clear()
-        tex.draw(dstrect=((ww - dw) // 2, (wh - dh) // 2, dw, dh))
+        if time.time() - last_frame_t > 1.5:  # stream stalled: say so instead of freezing
+            mw, mh = msg.width, msg.height
+            msg.draw(dstrect=((ww - mw) // 2, (wh - mh) // 2, mw, mh))
+        else:
+            tex.draw(dstrect=((ww - dw) // 2, (wh - dh) // 2, dw, dh))
         ren.present()  # waits for vsync
         now = time.time()
         if now - t_stat >= 5:
@@ -460,7 +505,8 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
     stop.set()
     if audio is not None:
         audio.close()
-    cap.release()
+    if cap is not None:
+        cap.release()
     pygame.quit()
     return code
 
