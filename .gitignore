@@ -1,0 +1,23 @@
+# build output
+build*/
+fw/build*/
+fw/postmortem/
+__pycache__/
+*.pyc
+
+# SDK / upstream clones (see README: clone pico-sdk into third_party/)
+third_party/
+
+# working files from development, not part of the project
+/*.png
+/*.pdf
+/page.html
+/ref_*
+/docs/
+
+# host/: only the supported tools are tracked
+host/*
+!host/bridge.py
+!host/bridge_hid.py
+!host/gui_hid.py
+!host/requirements.txt
