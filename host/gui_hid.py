@@ -97,7 +97,7 @@ def keep_process_responsive():
         pass
 
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 SLOTS = 4
 KEEPALIVE_S = 30  # idle seconds before a keep-alive nudge
@@ -557,9 +557,15 @@ class App:
         ).grid(row=2, column=1, sticky="w", pady=2)
         self.cap_btn = ttk.Button(cf, text="Open capture window", width=22, command=self.toggle_capture)
         self.cap_btn.grid(row=2, column=2, sticky="e", padx=8, pady=2)
+        ttk.Label(cf, text="Volume:").grid(row=3, column=0, sticky="e", padx=(8, 4), pady=2)
+        self.cap_vol = tk.IntVar(value=int(s.get("cap_volume", 200)))
+        self.cap_vol_lbl = tk.StringVar(value=f"{self.cap_vol.get()}%")
+        ttk.Scale(cf, from_=0, to=400, orient="horizontal", length=250, variable=self.cap_vol,
+                  command=self.on_volume).grid(row=3, column=1, sticky="w", pady=2)
+        ttk.Label(cf, textvariable=self.cap_vol_lbl, width=6).grid(row=3, column=2, sticky="w")
         self.cap_status = tk.StringVar(value="Looking for capture devices...")
         ttk.Label(cf, textvariable=self.cap_status, wraplength=470, foreground="#555555").grid(
-            row=3, column=0, columnspan=3, sticky="w", padx=8, pady=(2, 6)
+            row=4, column=0, columnspan=3, sticky="w", padx=8, pady=(2, 6)
         )
         for v in (self.cap_video_cb, self.cap_audio_cb):
             v.bind("<<ComboboxSelected>>", lambda e: self.save_capture())
@@ -644,7 +650,14 @@ class App:
             self.cap_status.set("No capture device found. Is ffmpeg installed "
                                 "(winget install Gyan.FFmpeg) and the card plugged in?")
         else:
-            self.cap_status.set("Ready. In the window: f = fullscreen, m = mute, q = close.")
+            self.cap_status.set("Ready. In the window: f = fullscreen, m = mute, "
+                                "wheel/arrows = volume, q = close.")
+
+    def on_volume(self, _=None):
+        pct = int(round(self.cap_vol.get() / 5.0) * 5)
+        self.cap_vol_lbl.set(f"{pct}%")
+        self.viewer.send_volume(pct)
+        save_settings({"cap_volume": pct})
 
     def save_capture(self):
         save_settings({"cap_video": self.cap_video.get(),
@@ -657,7 +670,8 @@ class App:
             return
         self.save_capture()
         if not self.viewer.start(self.video_names, self.cap_video.get(),
-                                 self.cap_audio.get(), self.cap_mode.get()):
+                                 self.cap_audio.get(), self.cap_mode.get(),
+                                 volume=int(round(self.cap_vol.get() / 5.0) * 5)):
             self.cap_status.set("Could not start: " + self.viewer.error)
 
     def update_capture(self):
@@ -666,7 +680,7 @@ class App:
             self.cap_btn.config(text="Close capture window")
             self.cap_status.set(
                 "Capture window is open (" + (msg or "starting...") + "). "
-                "In it: f = fullscreen, m = mute, q = close.")
+                "In it: f = fullscreen, m = mute, wheel/arrows = volume, q = close.")
         else:
             self.cap_btn.config(text="Open capture window")
             if state == "failed":

@@ -1,6 +1,6 @@
 # rp2350-switch-pad
 
-**Version 0.1.1** - Windows exe and firmware on the releases page, see [CHANGELOG.md](CHANGELOG.md).
+**Version 0.1.2** - capture window volume control, see [CHANGELOG.md](CHANGELOG.md).
 
 Play your Nintendo Switch 2 remotely with friends over [Parsec](https://parsec.app): a
 Waveshare **RP2350-USB-C** board pretends to be a wired PowerA Switch controller, and a PC tool
@@ -61,7 +61,7 @@ whole board (both ports) can freeze. Only unplugging **both** cables recovers it
 - **Capture card window** (UGREEN HDMI Capture or any DirectShow card): opens a low-latency window with
   video and audio that you can share in Parsec, Discord or OBS. Frames are drawn on the GPU with vsync
   (no tearing), only the newest frame is ever shown (no queueing), audio goes through a small WASAPI
-  buffer. Keys in the window: `f` fullscreen, `m` mute, `q`/`Esc` close. It needs
+  buffer. Keys in the window: `f` fullscreen, `m` mute, mouse wheel or Up/Down = volume, `q`/`Esc` close. It needs
   `ffmpeg` only to list device names (`winget install Gyan.FFmpeg`). Standalone:
   `py host/capture_view.py --video-index 1 --audio "<audio device name>"`.
 - **Keep-alive** (default on, remembered): after 30 s with no change on the pad, sends a 3-frame,

@@ -9,7 +9,7 @@ Run by the GUI as a child process (or directly: py capture_view.py --list):
     WASAPI buffer (~40-80 ms), dropping audio if it ever backs up.
 
 It is an ordinary desktop window ("Switch Capture") so you can share it in Parsec,
-Discord or OBS. Keys in the window: f = fullscreen, m = mute, q / Esc = close.
+Discord or OBS. Keys in the window: f = fullscreen, m = mute, Up/Down or mouse wheel = volume, q / Esc = close.
 """
 import argparse
 import collections
@@ -121,9 +121,10 @@ def grab_loop(cap, slot, stop):
 class AudioPipe:
     """capture-card input -> default output with a tiny drop-oldest buffer."""
 
-    def __init__(self, name_hint):
+    def __init__(self, name_hint, gain=1.0):
         self.q = collections.deque()
         self.muted = False
+        self.gain = gain  # linear; 1.0 = unchanged, 4.0 = +12 dB
         self.err = ""
         self.streams = []
         try:
@@ -161,9 +162,14 @@ class AudioPipe:
             n = min(len(blk), frames)
             outdata[:] = 0
             if not self.muted:
-                outdata[:n, :ch_in] = blk[:n]
+                x = blk[:n] * self.gain
+                if self.gain > 1.0:  # soft knee above 0.8 instead of hard clipping
+                    a = np.abs(x)
+                    over = a > 0.8
+                    x = np.where(over, np.sign(x) * (0.8 + 0.2 * np.tanh((a - 0.8) / 0.2)), x)
+                outdata[:n, :ch_in] = x
                 if ch_in == 1:
-                    outdata[:n, 1:] = blk[:n]
+                    outdata[:n, 1:] = x
 
         i = sd.InputStream(device=pick, channels=ch_in, samplerate=rate, blocksize=block,
                            dtype="float32", latency="low", callback=cb_in, extra_settings=ex)
@@ -182,7 +188,7 @@ class AudioPipe:
                 pass
 
 
-def run_viewer(vidx, audio_hint, mode, no_audio=False):
+def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
     w, h, fps = MODES.get(mode, MODES[DEFAULT_MODE])
     cap = cv2.VideoCapture(vidx, cv2.CAP_DSHOW)
     if not cap.isOpened():
@@ -196,9 +202,21 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False):
     got = (int(cap.get(3)), int(cap.get(4)))
     print(f"INFO video {got[0]}x{got[1]} requested {w}x{h}@{fps}", file=sys.stderr, flush=True)
 
-    audio = None if no_audio else AudioPipe(audio_hint)
+    audio = None if no_audio else AudioPipe(audio_hint, volume / 100.0)
     if audio is not None and audio.err:
         print("WARN " + audio.err, file=sys.stderr, flush=True)
+
+    def read_commands():  # "VOL <percent>" lines from the GUI process
+        for raw in sys.stdin:
+            try:
+                parts = raw.split()
+                if len(parts) == 2 and parts[0] == "VOL" and audio is not None:
+                    audio.gain = max(0.0, min(8.0, int(parts[1]) / 100.0))
+            except ValueError:
+                pass
+
+    if sys.stdin is not None:
+        threading.Thread(target=read_commands, daemon=True).start()
 
     slot, stop = LatestFrame(), threading.Event()
     threading.Thread(target=grab_loop, args=(cap, slot, stop), daemon=True).start()
@@ -225,11 +243,17 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False):
         for e in pygame.event.get():
             if e.type in (pygame.QUIT, pygame.WINDOWCLOSE):
                 running = False
+            elif e.type == pygame.MOUSEWHEEL and audio is not None:
+                audio.gain = max(0.0, min(8.0, audio.gain + 0.1 * e.y))
             elif e.type == pygame.KEYDOWN:
                 if e.key in (pygame.K_q, pygame.K_ESCAPE):
                     running = False
                 elif e.key == pygame.K_m and audio is not None:
                     audio.muted = not audio.muted
+                elif e.key in (pygame.K_UP, pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS) and audio:
+                    audio.gain = min(8.0, audio.gain + 0.1)
+                elif e.key in (pygame.K_DOWN, pygame.K_MINUS, pygame.K_KP_MINUS) and audio:
+                    audio.gain = max(0.0, audio.gain - 0.1)
                 elif e.key == pygame.K_f:
                     fullscreen = not fullscreen
                     if fullscreen:
@@ -246,7 +270,8 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False):
         if now - t_stat >= 5:
             print(f"STATS shown {shown / (now - t_stat):.0f} fps, capture->screen "
                   f"{age_sum / max(shown, 1):.0f} ms"
-                  + (", muted" if audio is not None and audio.muted else ""),
+                  + (f", volume {audio.gain * 100:.0f}%" if audio is not None else "")
+                  + (" (muted)" if audio is not None and audio.muted else ""),
                   file=sys.stderr, flush=True)
             t_stat, shown, age_sum = now, 0, 0.0
     stop.set()
@@ -270,7 +295,7 @@ class Viewer:
     def running(self):
         return self.proc is not None and self.proc.poll() is None
 
-    def start(self, video_names, video, audio, mode=DEFAULT_MODE, mute_audio=False):
+    def start(self, video_names, video, audio, mode=DEFAULT_MODE, mute_audio=False, volume=200):
         if self.running():
             return True
         if not video:
@@ -280,13 +305,13 @@ class Viewer:
         base = ([sys.executable, "--capture-view"] if getattr(sys, "frozen", False)
                 else [sys.executable, HERE])
         cmd = base + ["--video-index", str(video_index(video, video_names)),
-                      "--audio", audio or "", "--mode", mode]
+                      "--audio", audio or "", "--mode", mode, "--volume", str(int(volume))]
         if mute_audio or not audio:
             cmd.append("--no-audio")
         self.lines, self.error, self.stats = [], "", ""
         try:
             self.proc = subprocess.Popen(
-                cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, stdin=subprocess.PIPE,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
         except OSError as e:
@@ -305,6 +330,14 @@ class Viewer:
                 self.stats = line[6:]
             self.lines.append(line[-200:])
             del self.lines[:-30]
+
+    def send_volume(self, percent):
+        if self.running():
+            try:
+                self.proc.stdin.write(f"VOL {int(percent)}\n".encode())
+                self.proc.stdin.flush()
+            except (OSError, ValueError):
+                pass
 
     def stop(self):
         p, self.proc = self.proc, None
@@ -338,6 +371,7 @@ def main():
     ap.add_argument("--audio", default="")
     ap.add_argument("--mode", default=DEFAULT_MODE)
     ap.add_argument("--no-audio", action="store_true")
+    ap.add_argument("--volume", type=int, default=100, help="percent, 100 = unchanged")
     a = ap.parse_args()
     if a.list:
         print(list_devices())
@@ -345,7 +379,7 @@ def main():
     if cv2 is None:
         print("ERROR missing packages: py -m pip install opencv-python numpy sounddevice", file=sys.stderr)
         return 3
-    return run_viewer(a.video_index, a.audio, a.mode, a.no_audio)
+    return run_viewer(a.video_index, a.audio, a.mode, a.no_audio, a.volume)
 
 
 if __name__ == "__main__":

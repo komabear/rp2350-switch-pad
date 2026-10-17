@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2 - 2026-10-17
+
+- Capture window volume: slider in the GUI (0-400%, default 200%, remembered, changes the open window
+  live), plus mouse wheel / Up / Down inside the window. A soft limiter avoids harsh clipping when the
+  signal is boosted. (The UGREEN card's audio arrives quietly, so a boost is usually needed.)
+- No firmware changes (`bridge.uf2` is identical to 0.1.0/0.1.1).
+
 ## 0.1.1 - 2026-10-17
 
 - Release bundle on the GitHub releases page: `rp2350-switch-pad-v0.1.1-windows.zip` (the GUI as a
