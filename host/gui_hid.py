@@ -540,11 +540,14 @@ class App:
             self.dot("switch", BADC, "pad port is plugged into THIS PC")
         elif not link or stuck or board is None or age > 3.0:
             self.dot("switch", IDLEC, "unknown (no board status)")
-        elif board["polling"] or (board["polling"] is None and board["mounted"]
-                                  and not board["suspended"]):
+        elif board["mounted"] and board["polling"]:
             self.dot("switch", OKC, "yes - console is reading the pad")
+        elif board["mounted"] and not board["suspended"]:
+            # enumerated and the bus is awake; the Switch sometimes stops
+            # polling a static pad, which is normal
+            self.dot("switch", OKC, "yes - pad enumerated by the console")
         elif board["mounted"]:
-            self.dot("switch", WARNC, "pad found, not being read (console asleep?)")
+            self.dot("switch", WARNC, "pad found, USB bus suspended (console asleep?)")
         else:
             self.dot("switch", BADC, "no - nothing enumerated it")
 
