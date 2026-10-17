@@ -558,9 +558,10 @@ class App:
         self.cap_btn = ttk.Button(cf, text="Open capture window", width=22, command=self.toggle_capture)
         self.cap_btn.grid(row=2, column=2, sticky="e", padx=8, pady=2)
         ttk.Label(cf, text="Volume:").grid(row=3, column=0, sticky="e", padx=(8, 4), pady=2)
-        self.cap_vol = tk.IntVar(value=int(s.get("cap_volume", 200)))
+        # slider 0-100%, where 100% = 10x gain (the card's audio arrives quietly)
+        self.cap_vol = tk.IntVar(value=int(s.get("cap_vol_pct", 50)))
         self.cap_vol_lbl = tk.StringVar(value=f"{self.cap_vol.get()}%")
-        ttk.Scale(cf, from_=0, to=400, orient="horizontal", length=250, variable=self.cap_vol,
+        ttk.Scale(cf, from_=0, to=100, orient="horizontal", length=250, variable=self.cap_vol,
                   command=self.on_volume).grid(row=3, column=1, sticky="w", pady=2)
         ttk.Label(cf, textvariable=self.cap_vol_lbl, width=6).grid(row=3, column=2, sticky="w")
         self.cap_status = tk.StringVar(value="Looking for capture devices...")
@@ -654,10 +655,10 @@ class App:
                                 "wheel/arrows = volume, q = close.")
 
     def on_volume(self, _=None):
-        pct = int(round(self.cap_vol.get() / 5.0) * 5)
+        pct = int(round(self.cap_vol.get()))
         self.cap_vol_lbl.set(f"{pct}%")
-        self.viewer.send_volume(pct)
-        save_settings({"cap_volume": pct})
+        self.viewer.send_volume(pct * 10)  # slider percent -> gain percent (100% = 10x)
+        save_settings({"cap_vol_pct": pct})
 
     def save_capture(self):
         save_settings({"cap_video": self.cap_video.get(),
@@ -671,16 +672,20 @@ class App:
         self.save_capture()
         if not self.viewer.start(self.video_names, self.cap_video.get(),
                                  self.cap_audio.get(), self.cap_mode.get(),
-                                 volume=int(round(self.cap_vol.get() / 5.0) * 5)):
+                                 volume=int(round(self.cap_vol.get())) * 10):
             self.cap_status.set("Could not start: " + self.viewer.error)
 
     def update_capture(self):
         state, msg = self.viewer.state()
         if state == "running":
             self.cap_btn.config(text="Close capture window")
+            lvl = self.viewer.level
+            hint = ("" if lvl is None or lvl >= 60 else
+                    f"  Windows recording level of this card is only {lvl}%: set it to 100% in "
+                    "Settings > System > Sound > Input for a cleaner, louder sound.")
             self.cap_status.set(
                 "Capture window is open (" + (msg or "starting...") + "). "
-                "In it: f = fullscreen, m = mute, wheel/arrows = volume, q = close.")
+                "In it: f = fullscreen, m = mute, wheel/arrows = volume, q = close." + hint)
         else:
             self.cap_btn.config(text="Open capture window")
             if state == "failed":

@@ -4,3 +4,4 @@ opencv-python
 numpy
 sounddevice
 pygame-ce
+pycaw

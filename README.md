@@ -61,7 +61,7 @@ whole board (both ports) can freeze. Only unplugging **both** cables recovers it
 - **Capture card window** (UGREEN HDMI Capture or any DirectShow card): opens a low-latency window with
   video and audio that you can share in Parsec, Discord or OBS. Frames are drawn on the GPU with vsync
   (no tearing), only the newest frame is ever shown (no queueing), audio goes through a small WASAPI
-  buffer. Keys in the window: `f` fullscreen, `m` mute, mouse wheel or Up/Down = volume, `q`/`Esc` close. It needs
+  buffer. Keys in the window: `f` fullscreen, `m` mute, mouse wheel or Up/Down = volume (the GUI has a 0-100% slider, 100% = 10x), `q`/`Esc` close. If the card is quiet, set its recording level in Windows (Settings > System > Sound > Input) to 100% first. It needs
   `ffmpeg` only to list device names (`winget install Gyan.FFmpeg`). Standalone:
   `py host/capture_view.py --video-index 1 --audio "<audio device name>"`.
 - **Keep-alive** (default on, remembered): after 30 s with no change on the pad, sends a 3-frame,

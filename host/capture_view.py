@@ -9,7 +9,7 @@ Run by the GUI as a child process (or directly: py capture_view.py --list):
     WASAPI buffer (~40-80 ms), dropping audio if it ever backs up.
 
 It is an ordinary desktop window ("Switch Capture") so you can share it in Parsec,
-Discord or OBS. Keys in the window: f = fullscreen, m = mute, Up/Down or mouse wheel = volume, q / Esc = close.
+Discord or OBS. Keys in the window: f = fullscreen, m = mute, Up/Down or mouse wheel = volume (100% = 10x), q / Esc = close.
 """
 import argparse
 import collections
@@ -118,6 +118,32 @@ def grab_loop(cap, slot, stop):
             time.sleep(0.005)
 
 
+def input_level(hint):
+    """Windows' own recording level (0-100) of the capture device, or None. A low value here
+    (e.g. 17%) makes the card very quiet before any software boost."""
+    try:
+        import comtypes
+        from comtypes import CLSCTX_ALL
+        from ctypes import POINTER, cast
+        from pycaw.constants import CLSID_MMDeviceEnumerator
+        from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume, IMMDeviceEnumerator
+        key = (re.findall(r"\(([^)]*)\)", hint) or [hint])[-1].lower() if hint else "ugreen"
+        words = [w for w in re.split(r"\W+", key) if len(w) > 2]
+        comtypes.CoInitialize()
+        enum = comtypes.CoCreateInstance(
+            CLSID_MMDeviceEnumerator, IMMDeviceEnumerator, comtypes.CLSCTX_INPROC_SERVER)
+        coll = enum.EnumAudioEndpoints(1, 1)  # capture devices, active
+        for i in range(coll.GetCount()):
+            d = coll.Item(i)
+            if all(w in AudioUtilities.CreateDevice(d).FriendlyName.lower() for w in words):
+                vol = cast(d.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None),
+                           POINTER(IAudioEndpointVolume))
+                return int(round(vol.GetMasterVolumeLevelScalar() * 100))
+    except Exception:
+        pass
+    return None
+
+
 class AudioPipe:
     """capture-card input -> default output with a tiny drop-oldest buffer."""
 
@@ -205,13 +231,17 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
     audio = None if no_audio else AudioPipe(audio_hint, volume / 100.0)
     if audio is not None and audio.err:
         print("WARN " + audio.err, file=sys.stderr, flush=True)
+    if audio is not None:
+        lvl = input_level(audio_hint)
+        if lvl is not None:
+            print(f"LEVEL {lvl}", file=sys.stderr, flush=True)
 
     def read_commands():  # "VOL <percent>" lines from the GUI process
         for raw in sys.stdin:
             try:
                 parts = raw.split()
                 if len(parts) == 2 and parts[0] == "VOL" and audio is not None:
-                    audio.gain = max(0.0, min(8.0, int(parts[1]) / 100.0))
+                    audio.gain = max(0.0, min(10.0, int(parts[1]) / 100.0))
             except ValueError:
                 pass
 
@@ -244,16 +274,16 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
             if e.type in (pygame.QUIT, pygame.WINDOWCLOSE):
                 running = False
             elif e.type == pygame.MOUSEWHEEL and audio is not None:
-                audio.gain = max(0.0, min(8.0, audio.gain + 0.1 * e.y))
+                audio.gain = max(0.0, min(10.0, audio.gain + 0.2 * e.y))
             elif e.type == pygame.KEYDOWN:
                 if e.key in (pygame.K_q, pygame.K_ESCAPE):
                     running = False
                 elif e.key == pygame.K_m and audio is not None:
                     audio.muted = not audio.muted
                 elif e.key in (pygame.K_UP, pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS) and audio:
-                    audio.gain = min(8.0, audio.gain + 0.1)
+                    audio.gain = min(10.0, audio.gain + 0.2)
                 elif e.key in (pygame.K_DOWN, pygame.K_MINUS, pygame.K_KP_MINUS) and audio:
-                    audio.gain = max(0.0, audio.gain - 0.1)
+                    audio.gain = max(0.0, audio.gain - 0.2)
                 elif e.key == pygame.K_f:
                     fullscreen = not fullscreen
                     if fullscreen:
@@ -270,7 +300,7 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
         if now - t_stat >= 5:
             print(f"STATS shown {shown / (now - t_stat):.0f} fps, capture->screen "
                   f"{age_sum / max(shown, 1):.0f} ms"
-                  + (f", volume {audio.gain * 100:.0f}%" if audio is not None else "")
+                  + (f", volume {audio.gain * 10:.0f}%" if audio is not None else "")
                   + (" (muted)" if audio is not None and audio.muted else ""),
                   file=sys.stderr, flush=True)
             t_stat, shown, age_sum = now, 0, 0.0
@@ -291,6 +321,7 @@ class Viewer:
         self.lines = []
         self.error = ""
         self.stats = ""
+        self.level = None  # Windows recording level of the capture device (percent)
 
     def running(self):
         return self.proc is not None and self.proc.poll() is None
@@ -308,7 +339,7 @@ class Viewer:
                       "--audio", audio or "", "--mode", mode, "--volume", str(int(volume))]
         if mute_audio or not audio:
             cmd.append("--no-audio")
-        self.lines, self.error, self.stats = [], "", ""
+        self.lines, self.error, self.stats, self.level = [], "", "", None
         try:
             self.proc = subprocess.Popen(
                 cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, stdin=subprocess.PIPE,
@@ -328,6 +359,11 @@ class Viewer:
                 continue
             if line.startswith("STATS"):
                 self.stats = line[6:]
+            elif line.startswith("LEVEL "):
+                try:
+                    self.level = int(line[6:])
+                except ValueError:
+                    pass
             self.lines.append(line[-200:])
             del self.lines[:-30]
 

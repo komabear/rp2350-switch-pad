@@ -2,9 +2,12 @@
 
 ## 0.1.2 - 2026-10-17
 
-- Capture window volume: slider in the GUI (0-400%, default 200%, remembered, changes the open window
-  live), plus mouse wheel / Up / Down inside the window. A soft limiter avoids harsh clipping when the
-  signal is boosted. (The UGREEN card's audio arrives quietly, so a boost is usually needed.)
+- Capture window volume: slider in the GUI (0-100%, where 100% = 10x gain; default 50%, remembered,
+  changes the open window live), plus mouse wheel / Up / Down inside the window. A soft limiter avoids
+  harsh clipping when the signal is boosted.
+- The capture panel warns when Windows' own recording level for the card is low (the UGREEN card
+  defaulted to 17%, which made it very quiet). Setting it to 100% in Settings > System > Sound > Input
+  is the best fix; the slider is the second step.
 - No firmware changes (`bridge.uf2` is identical to 0.1.0/0.1.1).
 
 ## 0.1.1 - 2026-10-17
