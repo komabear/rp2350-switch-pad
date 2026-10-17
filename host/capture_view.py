@@ -6,7 +6,7 @@ Run by the GUI as a child process (or directly: py capture_view.py --list):
     (pygame/SDL2 GPU renderer with vsync, so no tearing) always shows the latest one
     (older frames are dropped, never queued);
   - audio: the card's audio input is played to the default output through a small
-    WASAPI buffer (~40-80 ms), dropping audio if it ever backs up.
+    WASAPI buffer (~40 ms) in its own helper process (so the video can never starve it).
 
 It is an ordinary desktop window ("Switch Capture") so you can share it in Parsec,
 Discord or OBS. Keys in the window: f = fullscreen, m = mute, Up/Down or mouse wheel = volume (100% = 10x), q / Esc = close.
@@ -244,6 +244,127 @@ class AudioPipe:
                 pass
 
 
+def boost_process():
+    """Keep Windows from throttling this process (timer resolution, efficiency mode, priority)."""
+    import ctypes
+    try:
+        ctypes.windll.winmm.timeBeginPeriod(1)
+
+        class PPT(ctypes.Structure):
+            _fields_ = [("Version", ctypes.c_ulong), ("ControlMask", ctypes.c_ulong),
+                        ("StateMask", ctypes.c_ulong)]
+        k32 = ctypes.windll.kernel32
+        st = PPT(1, 1, 0)  # EXECUTION_SPEED throttling: controlled, OFF
+        k32.SetProcessInformation(k32.GetCurrentProcess(), 4, ctypes.byref(st), ctypes.sizeof(st))
+        k32.SetPriorityClass(k32.GetCurrentProcess(), 0x8000)  # above normal
+    except Exception:
+        pass
+
+
+def _self_cmd():
+    """Command that re-runs this module (the frozen exe relaunches itself)."""
+    return ([sys.executable, "--capture-view"] if getattr(sys, "frozen", False)
+            else [sys.executable, HERE])
+
+
+class AudioProxy:
+    """Runs the audio in its OWN process. In the same process as the video, the vsync wait and the
+    texture upload keep Python's interpreter lock for tens of milliseconds, so the audio callbacks
+    starved (measured: ~100 audible cuts per 30 s). Same interface as AudioPipe (gain, muted,
+    under, overflow, err, close)."""
+
+    def __init__(self, hint, gain=1.0):
+        self._gain, self._muted = gain, False
+        self.err, self.under, self.overflow = "", 0, 0
+        self.proc = None
+        cmd = _self_cmd() + ["--audio-only", "--audio", hint or "",
+                             "--volume", str(int(round(gain * 100)))]
+        try:
+            self.proc = subprocess.Popen(
+                cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW)
+        except OSError as e:
+            self.err = f"audio off: {e}"
+            return
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        for raw in iter(self.proc.stderr.readline, b""):
+            line = raw.decode("utf-8", "replace").strip()
+            if line.startswith("ASTATS"):
+                try:
+                    _, u, o = line.split()
+                    self.under, self.overflow = int(u), int(o)
+                except ValueError:
+                    pass
+            elif line.startswith("WARN"):
+                self.err = line
+                print(line, file=sys.stderr, flush=True)
+
+    def _send(self, text):
+        try:
+            self.proc.stdin.write((text + "\n").encode())
+            self.proc.stdin.flush()
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    @property
+    def gain(self):
+        return self._gain
+
+    @gain.setter
+    def gain(self, v):
+        self._gain = v
+        self._send(f"VOL {int(round(v * 100))}")
+
+    @property
+    def muted(self):
+        return self._muted
+
+    @muted.setter
+    def muted(self, v):
+        self._muted = bool(v)
+        self._send(f"MUTE {int(self._muted)}")
+
+    def close(self):
+        if self.proc is None:
+            return
+        self._send("QUIT")
+        try:
+            self.proc.stdin.close()
+            self.proc.wait(timeout=2)
+        except Exception:
+            self.proc.terminate()
+
+
+def run_audio_only(hint, volume):
+    """Audio helper process: card input -> default output, controlled over stdin."""
+    boost_process()
+    a = AudioPipe(hint, volume / 100.0)
+    if a.err:
+        print("WARN " + a.err, file=sys.stderr, flush=True)
+
+    def stats():
+        while True:
+            time.sleep(2)
+            print(f"ASTATS {a.under} {a.overflow}", file=sys.stderr, flush=True)
+
+    threading.Thread(target=stats, daemon=True).start()
+    for raw in sys.stdin:  # ends when the viewer closes our stdin or dies
+        parts = raw.split()
+        try:
+            if parts[0] == "VOL":
+                a.gain = max(0.0, min(10.0, int(parts[1]) / 100.0))
+            elif parts[0] == "MUTE":
+                a.muted = parts[1] == "1"
+            elif parts[0] == "QUIT":
+                break
+        except (ValueError, IndexError):
+            pass
+    a.close()
+    return 0
+
+
 def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
     w, h, fps = MODES.get(mode, MODES[DEFAULT_MODE])
     cap = cv2.VideoCapture(vidx, cv2.CAP_DSHOW)
@@ -258,7 +379,8 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
     got = (int(cap.get(3)), int(cap.get(4)))
     print(f"INFO video {got[0]}x{got[1]} requested {w}x{h}@{fps}", file=sys.stderr, flush=True)
 
-    audio = None if no_audio else AudioPipe(audio_hint, volume / 100.0)
+    boost_process()
+    audio = None if no_audio else AudioProxy(audio_hint, volume / 100.0)
     if audio is not None and audio.err:
         print("WARN " + audio.err, file=sys.stderr, flush=True)
     if audio is not None:
@@ -364,9 +486,7 @@ class Viewer:
             self.error = "no video device selected"
             return False
         # frozen (PyInstaller) build: relaunch this same exe in viewer mode
-        base = ([sys.executable, "--capture-view"] if getattr(sys, "frozen", False)
-                else [sys.executable, HERE])
-        cmd = base + ["--video-index", str(video_index(video, video_names)),
+        cmd = _self_cmd() + ["--video-index", str(video_index(video, video_names)),
                       "--audio", audio or "", "--mode", mode, "--volume", str(int(volume))]
         if mute_audio or not audio:
             cmd.append("--no-audio")
@@ -438,6 +558,7 @@ def main():
     ap.add_argument("--audio", default="")
     ap.add_argument("--mode", default=DEFAULT_MODE)
     ap.add_argument("--no-audio", action="store_true")
+    ap.add_argument("--audio-only", action="store_true", help="internal: audio helper process")
     ap.add_argument("--volume", type=int, default=100, help="percent, 100 = unchanged")
     a = ap.parse_args()
     if a.list:
@@ -446,6 +567,8 @@ def main():
     if cv2 is None:
         print("ERROR missing packages: py -m pip install opencv-python numpy sounddevice", file=sys.stderr)
         return 3
+    if a.audio_only:
+        return run_audio_only(a.audio, a.volume)
     return run_viewer(a.video_index, a.audio, a.mode, a.no_audio, a.volume)
 
 

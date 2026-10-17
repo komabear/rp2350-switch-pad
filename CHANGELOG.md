@@ -9,6 +9,10 @@
   ran dry every few seconds (~15 clicks a minute). The audio path now keeps a ~40 ms ring buffer and
   adjusts its read speed by a fraction of a percent (0 gaps measured over 40 s). The default volume is
   10% on the slider (= 1x, no boost) once the card's Windows recording level is at 100%.
+- The capture audio now runs in its own helper process. Sharing a process with the video drawing
+  (vsync wait, texture upload) starved the audio callbacks: ~80-120 audible cuts per 30 s while
+  drawing 1080p, worse when the window lost focus or went fullscreen; 0 cuts measured with the
+  separate process, and the drawing also got smoother.
 - The capture panel warns when Windows' own recording level for the card is low (the UGREEN card
   defaulted to 17%, which made it very quiet). Setting it to 100% in Settings > System > Sound > Input
   is the best fix; the slider is the second step.
