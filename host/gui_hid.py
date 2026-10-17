@@ -558,8 +558,9 @@ class App:
         self.cap_btn = ttk.Button(cf, text="Open capture window", width=22, command=self.toggle_capture)
         self.cap_btn.grid(row=2, column=2, sticky="e", padx=8, pady=2)
         ttk.Label(cf, text="Volume:").grid(row=3, column=0, sticky="e", padx=(8, 4), pady=2)
-        # slider 0-100%, where 100% = 10x gain (the card's audio arrives quietly)
-        self.cap_vol = tk.IntVar(value=int(s.get("cap_vol_pct", 50)))
+        # slider 0-100%, where 10% = 1x (unchanged) and 100% = 10x; with the card's Windows recording
+        # level at 100% the default 10% is right, boost only if the card is still quiet
+        self.cap_vol = tk.IntVar(value=int(s.get("cap_vol_pct", 10)))
         self.cap_vol_lbl = tk.StringVar(value=f"{self.cap_vol.get()}%")
         ttk.Scale(cf, from_=0, to=100, orient="horizontal", length=250, variable=self.cap_vol,
                   command=self.on_volume).grid(row=3, column=1, sticky="w", pady=2)

@@ -12,7 +12,6 @@ It is an ordinary desktop window ("Switch Capture") so you can share it in Parse
 Discord or OBS. Keys in the window: f = fullscreen, m = mute, Up/Down or mouse wheel = volume (100% = 10x), q / Esc = close.
 """
 import argparse
-import collections
 import os
 import re
 import subprocess
@@ -145,14 +144,25 @@ def input_level(hint):
 
 
 class AudioPipe:
-    """capture-card input -> default output with a tiny drop-oldest buffer."""
+    """capture-card input -> default output, with clock-drift compensation.
+
+    The card's audio clock and the sound card's clock never match exactly (here the output ran
+    ~0.2% fast), so a plain queue runs dry every few seconds and each gap is an audible click.
+    Instead the input goes into a ring buffer and the output reads it with linear interpolation at
+    a rate nudged by +-1% max to keep the buffer near a fixed target (~40 ms): an inaudible
+    pitch change instead of clicks.
+    """
+
+    TARGET_S = 0.040   # buffer fill the controller aims for
+    RING_S = 1.0
 
     def __init__(self, name_hint, gain=1.0):
-        self.q = collections.deque()
         self.muted = False
-        self.gain = gain  # linear; 1.0 = unchanged, 4.0 = +12 dB
+        self.gain = gain  # linear; 1.0 = unchanged, 10.0 = +20 dB
         self.err = ""
         self.streams = []
+        self.under = 0      # callbacks that had to output silence
+        self.overflow = 0   # times the buffer was cut back
         try:
             self._open(name_hint)
         except Exception as e:  # keep the video window alive without audio
@@ -173,29 +183,49 @@ class AudioPipe:
         ex = sd.WasapiSettings(auto_convert=True)
         block = rate // 100  # 10 ms
 
+        size = int(rate * self.RING_S)
+        ring = np.zeros((size, 2), dtype=np.float32)
+        target = int(rate * self.TARGET_S)
+        st = {"w": 0, "r": 0.0, "primed": False}
+
         def cb_in(indata, frames, t, status):
-            if len(self.q) > 12:  # > ~120 ms queued: drop the oldest, stay live
-                while len(self.q) > 3:
-                    self.q.popleft()
-            self.q.append(indata.copy())
+            x = indata if ch_in == 2 else np.repeat(indata, 2, axis=1)
+            idx = (st["w"] + np.arange(frames)) % size
+            ring[idx] = x
+            st["w"] += frames
 
         def cb_out(outdata, frames, t, status):
-            try:
-                blk = self.q.popleft()
-            except IndexError:
+            fill = st["w"] - st["r"]
+            if not st["primed"]:
+                if fill < target:
+                    outdata.fill(0)
+                    return
+                st["primed"] = True
+            if fill > 3 * target:  # far behind real time: cut back to the target
+                st["r"] = st["w"] - target
+                fill = target
+                self.overflow += 1
+            # proportional speed control: buffer too full -> read a bit faster, too empty -> slower
+            ratio = 1.0 + max(-0.01, min(0.01, (fill - target) / target * 0.02))
+            need = frames * ratio + 2
+            if fill < need:  # underrun: play silence and refill to the target before resuming
+                outdata.fill(0)
+                st["primed"] = False
+                self.under += 1
+                return
+            pos = st["r"] + np.arange(frames) * ratio
+            i0 = np.floor(pos).astype(np.int64)
+            fr = (pos - i0).astype(np.float32)[:, None]
+            x = ring[i0 % size] * (1.0 - fr) + ring[(i0 + 1) % size] * fr
+            st["r"] += frames * ratio
+            if self.muted:
                 outdata.fill(0)
                 return
-            n = min(len(blk), frames)
-            outdata[:] = 0
-            if not self.muted:
-                x = blk[:n] * self.gain
-                if self.gain > 1.0:  # soft knee above 0.8 instead of hard clipping
-                    a = np.abs(x)
-                    over = a > 0.8
-                    x = np.where(over, np.sign(x) * (0.8 + 0.2 * np.tanh((a - 0.8) / 0.2)), x)
-                outdata[:n, :ch_in] = x
-                if ch_in == 1:
-                    outdata[:n, 1:] = x
+            x = x * self.gain
+            if self.gain > 1.0:  # soft knee above 0.8 instead of hard clipping
+                a = np.abs(x)
+                x = np.where(a > 0.8, np.sign(x) * (0.8 + 0.2 * np.tanh((a - 0.8) / 0.2)), x)
+            outdata[:] = x
 
         i = sd.InputStream(device=pick, channels=ch_in, samplerate=rate, blocksize=block,
                            dtype="float32", latency="low", callback=cb_in, extra_settings=ex)
@@ -300,7 +330,8 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
         if now - t_stat >= 5:
             print(f"STATS shown {shown / (now - t_stat):.0f} fps, capture->screen "
                   f"{age_sum / max(shown, 1):.0f} ms"
-                  + (f", volume {audio.gain * 10:.0f}%" if audio is not None else "")
+                  + (f", volume {audio.gain * 10:.0f}%, audio gaps {audio.under}/cuts {audio.overflow}"
+                     if audio is not None else "")
                   + (" (muted)" if audio is not None and audio.muted else ""),
                   file=sys.stderr, flush=True)
             t_stat, shown, age_sum = now, 0, 0.0
