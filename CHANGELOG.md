@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- The capture window recognises the card's own "no valid video signal" picture (vertical stripes, every
+  row identical) and shows an explanation instead of the stripes: replug the HDMI cable between the
+  dock and the card and check the Switch's video output. It also tries reopening the card now and then.
+
 ## 0.1.3 - 2026-10-17
 
 - **Fixed the capture card dropping out during play.** The GUI listed all HID devices every 1-3 s to

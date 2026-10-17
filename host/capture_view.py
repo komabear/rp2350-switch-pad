@@ -145,7 +145,15 @@ def clog(msg):
         pass
 
 
-def grab_loop(cap, vidx, w, h, fps, slot, stop):
+def is_error_pattern(f):
+    """True for the card's own 'no valid video signal' picture: vertical stripes, i.e. every row
+    identical. A real game frame never has that (a plain black frame is handled separately)."""
+    import numpy as np
+    rows = f[::108].astype(np.int16)
+    return float(f[::64, ::64].mean()) > 3.0 and float(np.abs(rows - rows[0]).mean()) < 0.5
+
+
+def grab_loop(cap, vidx, w, h, fps, slot, stop, status):
     """Read frames into `slot` and keep the card healthy. Reopens it by itself when
       - no frame arrives for 2 s (stall after an HDMI mode change),
       - the frame rate stays under 20 fps for 2 s (the card falls to ~1 fps when its input drops),
@@ -157,6 +165,7 @@ def grab_loop(cap, vidx, w, h, fps, slot, stop):
     fresh_reopen = False
     t_open = now  # warm-up: the card needs ~2 s after opening before the rate means anything
     bright, low_secs, black_secs, bad, t_beat = 255.0, 0, 0, False, now
+    pattern_secs, last_pattern_reopen = 0, 0.0
     clog(f"capture loop started (device {vidx}, {w}x{h}@{fps})")
     while not stop.is_set():
         if cap is None:
@@ -179,6 +188,12 @@ def grab_loop(cap, vidx, w, h, fps, slot, stop):
             n_sec += 1
             if n % 10 == 0:
                 bright = float(f[::64, ::64].mean())
+            if n % 15 == 0:
+                if is_error_pattern(f):
+                    pattern_secs = pattern_secs + 0.25
+                else:
+                    pattern_secs = 0
+                status["no_signal"] = pattern_secs >= 2.0
         else:
             time.sleep(0.005)
         if now - t_sec >= 1.0:  # once a second: judge the stream
@@ -187,9 +202,10 @@ def grab_loop(cap, vidx, w, h, fps, slot, stop):
             # a black picture alone is normal (game fades, loading screens): only a long one counts
             low_secs = low_secs + 1 if rate < 20 else 0
             black_secs = black_secs + 1 if bright < 1.5 else 0
-            problem = (rate < 45 or black_secs >= 5) and now - t_open > 3
+            problem = (rate < 45 or black_secs >= 5 or status.get("no_signal")) and now - t_open > 3
             if problem and not bad:
-                clog(f"PROBLEM: {rate:.0f} fps, picture brightness {bright:.0f}")
+                clog(f"PROBLEM: {rate:.0f} fps, picture brightness {bright:.0f}"
+                     + (" - the card shows its 'no valid video signal' pattern" if status.get("no_signal") else ""))
             elif bad and not problem:
                 clog(f"recovered: {rate:.0f} fps, brightness {bright:.0f}")
             bad = problem
@@ -200,6 +216,8 @@ def grab_loop(cap, vidx, w, h, fps, slot, stop):
                 reason = f"frame rate collapsed ({rate:.0f} fps)"
             elif black_secs >= 10 and now - last_reopen > 60:
                 reason = "picture black for 10 s"
+            elif status.get("no_signal") and now - last_reopen > 20:
+                reason = "card shows its no-signal pattern"  # a reopen sometimes makes it lock again
         if not reason and now - last_ok > 2.0:
             reason = "no frames for 2 s"
         if reason:
@@ -491,7 +509,8 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
         threading.Thread(target=read_commands, daemon=True).start()
 
     slot, stop = LatestFrame(), threading.Event()
-    threading.Thread(target=grab_loop, args=(cap, vidx, w, h, fps, slot, stop), daemon=True).start()
+    status = {"no_signal": False}
+    threading.Thread(target=grab_loop, args=(cap, vidx, w, h, fps, slot, stop, status), daemon=True).start()
 
     # GPU renderer with vsync (OpenCV's own window has no vsync -> tearing in fullscreen)
     import pygame
@@ -504,6 +523,18 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
     pygame.font.init()
     msg = sv.Texture.from_surface(ren, pygame.font.Font(None, 56).render(
         "Waiting for the capture card / video signal...", True, (230, 230, 230)))
+    font = pygame.font.Font(None, 44)
+    lines = ["The capture card is not getting a valid video signal.",
+             "Unplug and replug the HDMI cable between the dock and the card,",
+             "and check the Switch's video output (1080p, 60 Hz, HDR and VRR off)."]
+    surfs = [font.render(s, True, (240, 240, 240)) for s in lines]
+    sw, sh_ = max(s.get_width() for s in surfs), sum(s.get_height() + 10 for s in surfs)
+    big = pygame.Surface((sw, sh_), pygame.SRCALPHA)
+    yy = 0
+    for s in surfs:
+        big.blit(s, ((sw - s.get_width()) // 2, yy))
+        yy += s.get_height() + 10
+    nosig = sv.Texture.from_surface(ren, big)
     last_frame_t = time.time()
     last_n, shown, t_stat, age_sum = 0, 0, time.time(), 0.0
     d_dropped, d_late, d_gap_max, d_presents, d_stall = 0, 0, 0.0, [], 0.0
@@ -551,7 +582,11 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
         sc = min(ww / got[0], wh / got[1])
         dw, dh = int(got[0] * sc), int(got[1] * sc)
         ren.clear()
-        if time.time() - last_frame_t > 1.5:  # stream stalled: say so instead of freezing
+        if status["no_signal"]:  # the card's own error pattern: hide it and explain
+            sc = min(1.0, ww * 0.9 / nosig.width)
+            nw, nh = int(nosig.width * sc), int(nosig.height * sc)
+            nosig.draw(dstrect=((ww - nw) // 2, (wh - nh) // 2, nw, nh))
+        elif time.time() - last_frame_t > 1.5:  # stream stalled: say so instead of freezing
             mw, mh = msg.width, msg.height
             msg.draw(dstrect=((ww - mw) // 2, (wh - mh) // 2, mw, mh))
         else:
