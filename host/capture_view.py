@@ -184,14 +184,15 @@ def grab_loop(cap, vidx, w, h, fps, slot, stop):
         if now - t_sec >= 1.0:  # once a second: judge the stream
             rate = n_sec / (now - t_sec)
             t_sec, n_sec = now, 0
-            problem = (rate < 45 or bright < 1.5) and now - t_open > 3
+            # a black picture alone is normal (game fades, loading screens): only a long one counts
+            low_secs = low_secs + 1 if rate < 20 else 0
+            black_secs = black_secs + 1 if bright < 1.5 else 0
+            problem = (rate < 45 or black_secs >= 5) and now - t_open > 3
             if problem and not bad:
                 clog(f"PROBLEM: {rate:.0f} fps, picture brightness {bright:.0f}")
             elif bad and not problem:
                 clog(f"recovered: {rate:.0f} fps, brightness {bright:.0f}")
             bad = problem
-            low_secs = low_secs + 1 if rate < 20 else 0
-            black_secs = black_secs + 1 if bright < 1.5 else 0
             if now - t_beat >= 60:
                 t_beat = now
                 clog(f"ok: {rate:.0f} fps, brightness {bright:.0f}")
