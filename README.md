@@ -1,6 +1,6 @@
 # rp2350-switch-pad
 
-**Version 0.1.0** - first complete version, see [CHANGELOG.md](CHANGELOG.md).
+**Version 0.1.1** - Windows exe and firmware on the releases page, see [CHANGELOG.md](CHANGELOG.md).
 
 Play your Nintendo Switch 2 remotely with friends over [Parsec](https://parsec.app): a
 Waveshare **RP2350-USB-C** board pretends to be a wired PowerA Switch controller, and a PC tool

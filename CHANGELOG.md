@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 - 2026-10-17
+
+- Release bundle on the GitHub releases page: `rp2350-switch-pad-v0.1.1-windows.zip` (the GUI as a
+  Windows exe plus `bridge.uf2`). Built with `tools/build_release.py` (PyInstaller).
+- The capture window works from the packaged exe (the exe relaunches itself in viewer mode).
+- `--check` smoke test for packaged builds; the GUI title shows the version.
+- No firmware changes from 0.1.0 (`bridge.uf2` is identical).
+
 ## 0.1.0 - 2026-10-17
 
 First complete version.
