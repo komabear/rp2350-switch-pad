@@ -549,7 +549,9 @@ class App:
         elif board["mounted"]:
             self.dot("switch", WARNC, "pad found, USB bus suspended (console asleep?)")
         else:
-            self.dot("switch", BADC, "no - nothing enumerated it")
+            # normal while the console sleeps (the board keeps re-attaching so it
+            # is picked up on wake); otherwise a cable/port problem
+            self.dot("switch", WARNC, "not enumerated (console asleep, or check cable)")
 
         # flow
         if board is not None and age <= 3.0 and link and not stuck:
@@ -569,7 +571,8 @@ class App:
             h = ("The link is frozen. Close this window, unplug BOTH board cables, wait 5 s, "
                  "then: native cable -> dock first, PIO cable -> PC last, and reopen this.")
         elif board is not None and age <= 3.0 and not board["mounted"]:
-            h = ("The Switch has not detected the pad. Check the board's native "
+            h = ("The Switch has not detected the pad. If the console is asleep this is normal: "
+                 "wake it, wait ~10 s and press a button on your pad. Otherwise: Check the board's native "
                  "(programming) Type-C is in a dock USB port with a data cable, then redo "
                  "the connect order: native -> dock first, PIO -> PC last.")
         elif slot is None:

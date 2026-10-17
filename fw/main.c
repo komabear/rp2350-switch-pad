@@ -339,6 +339,29 @@ void core0_main(void) {
 
 #ifdef NATIVE_PAD
         {
+            /* The Switch dock cuts/restores USB power around console sleep. We
+             * have no VBUS sense, so after a wake the device would stay
+             * attached-but-suspended forever and the console never re-enumerates
+             * it. While the bus stays suspended, re-present ourselves
+             * (drop and re-raise the D+ pull-up) every 2 s so a fresh attach is
+             * always visible shortly after the console wakes. */
+            static uint32_t susp_since, last_pulse;
+            uint32_t pnow = board_millis();
+            if (tud_suspended()) {
+                if (susp_since == 0) {
+                    susp_since = pnow ? pnow : 1;
+                    last_pulse = pnow;
+                } else if ((pnow - susp_since) > 1500 && (pnow - last_pulse) >= 2000) {
+                    last_pulse = pnow;
+                    tud_disconnect();
+                    sleep_ms(30);
+                    tud_connect();
+                }
+            } else {
+                susp_since = 0;
+            }
+        }
+        {
             /* status for the host GUI (GET_REPORT on the PIO link):
              * [0] magic 0xA5  [1] native USB mounted by the Switch/host
              * [2] suspended   [3] frames flowing  [4..7] frames applied

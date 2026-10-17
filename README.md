@@ -58,6 +58,10 @@ whole board (both ports) can freeze. Only unplugging **both** cables recovers it
   matches a Switch pad. Settings live in `%APPDATA%\mayflash_switch2_controller\gui_settings.json`.
 - **Keep-alive** (default on, remembered): after 30 s with no change on the pad, sends a 3-frame,
   ~10% right-stick nudge so the pad is never completely static. Untick it if a game reacts to it.
+- **Console sleep:** the Switch cuts and restores dock USB power, so the board re-presents its USB
+  attach every 2 s while the bus is suspended. After waking the console, wait ~10 s and press a
+  button once; the pad comes back on its own (verified over repeated sleep/wake cycles). The
+  "Switch has detected the pad" light is yellow while the console sleeps.
 - A small log of link/board state changes is written to
   `%APPDATA%\mayflash_switch2_controller\gui.log` (useful when the link freezes).
 - HOME / CAPTURE are press-and-hold buttons. The Xbox Guide button maps to HOME when Windows
