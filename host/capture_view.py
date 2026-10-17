@@ -95,11 +95,20 @@ class LatestFrame:
         self.lock = threading.Lock()
         self.frame, self.t, self.n = None, 0.0, 0
         self.cv = threading.Condition(self.lock)
+        self.gap_max = 0.0  # longest time between two captured frames since last take_gap()
 
     def put(self, f):
         with self.cv:
-            self.frame, self.t, self.n = f, time.perf_counter(), self.n + 1
+            now = time.perf_counter()
+            if self.t:
+                self.gap_max = max(self.gap_max, now - self.t)
+            self.frame, self.t, self.n = f, now, self.n + 1
             self.cv.notify_all()
+
+    def take_gap(self):
+        with self.lock:
+            g, self.gap_max = self.gap_max, 0.0
+            return g * 1000
 
     def wait_new(self, last_n, timeout=0.2):
         with self.cv:
@@ -121,39 +130,80 @@ def open_capture(vidx, w, h, fps):
     return cap
 
 
+CLOG_PATH = os.path.join(os.environ.get("APPDATA", "."), "mayflash_switch2_controller", "capture.log")
+
+
+def clog(msg):
+    """Append a timestamped line to capture.log (small, rotated) so problems can be diagnosed later."""
+    try:
+        os.makedirs(os.path.dirname(CLOG_PATH), exist_ok=True)
+        if os.path.exists(CLOG_PATH) and os.path.getsize(CLOG_PATH) > 300_000:
+            os.replace(CLOG_PATH, CLOG_PATH + ".old")
+        with open(CLOG_PATH, "a", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+    except OSError:
+        pass
+
+
 def grab_loop(cap, vidx, w, h, fps, slot, stop):
-    """Read frames into `slot`. Reopens the card by itself when the stream stalls (no frame for 2 s,
-    as happens after an HDMI mode change) or when the picture stays completely black for 10 s
-    (at most once a minute), and keeps retrying while the card cannot be opened."""
-    last_ok, black_since, last_black_reopen, n = time.time(), None, 0.0, 0
+    """Read frames into `slot` and keep the card healthy. Reopens it by itself when
+      - no frame arrives for 2 s (stall after an HDMI mode change),
+      - the frame rate stays under 20 fps for 3 s (the card falls to ~1 fps when its input drops),
+      - the picture stays completely black for 10 s,
+    (rate-limited), and keeps retrying while the card cannot be opened. Everything notable is
+    written to capture.log."""
+    now = time.time()
+    last_ok, last_reopen, t_sec, n_sec, n = now, 0.0, now, 0, 0
+    t_open = now  # warm-up: the card needs ~2 s after opening before the rate means anything
+    bright, low_secs, black_secs, bad, t_beat = 255.0, 0, 0, False, now
+    clog(f"capture loop started (device {vidx}, {w}x{h}@{fps})")
     while not stop.is_set():
         if cap is None:
             stop.wait(1.0)
             cap = open_capture(vidx, w, h, fps)
-            last_ok, black_since = time.time(), None
+            last_ok, t_sec, n_sec, low_secs, black_secs = time.time(), time.time(), 0, 0, 0
+            t_open = time.time()
             if cap is not None:
                 print("INFO capture device reopened", file=sys.stderr, flush=True)
+                clog("capture device reopened")
             continue
         ok, f = cap.read()
         now = time.time()
-        reopen = False
+        reason = ""
         if ok:
             last_ok = now
             slot.put(f)
             n += 1
-            if n % 30 == 0:  # twice a second: is the picture entirely black?
-                if f[::64, ::64].mean() < 1.5:
-                    black_since = black_since or now
-                else:
-                    black_since = None
-                if black_since and now - black_since > 10 and now - last_black_reopen > 60:
-                    last_black_reopen, black_since, reopen = now, None, True
+            n_sec += 1
+            if n % 10 == 0:
+                bright = float(f[::64, ::64].mean())
         else:
             time.sleep(0.005)
-        if reopen or now - last_ok > 2.0:
-            print("INFO capture stalled or black, reopening", file=sys.stderr, flush=True)
+        if now - t_sec >= 1.0:  # once a second: judge the stream
+            rate = n_sec / (now - t_sec)
+            t_sec, n_sec = now, 0
+            problem = (rate < 45 or bright < 1.5) and now - t_open > 3
+            if problem and not bad:
+                clog(f"PROBLEM: {rate:.0f} fps, picture brightness {bright:.0f}")
+            elif bad and not problem:
+                clog(f"recovered: {rate:.0f} fps, brightness {bright:.0f}")
+            bad = problem
+            low_secs = low_secs + 1 if rate < 20 else 0
+            black_secs = black_secs + 1 if bright < 1.5 else 0
+            if now - t_beat >= 60:
+                t_beat = now
+                clog(f"ok: {rate:.0f} fps, brightness {bright:.0f}")
+            if low_secs >= 3 and now - last_reopen > 15:
+                reason = f"frame rate collapsed ({rate:.0f} fps)"
+            elif black_secs >= 10 and now - last_reopen > 60:
+                reason = "picture black for 10 s"
+        if not reason and now - last_ok > 2.0:
+            reason = "no frames for 2 s"
+        if reason:
+            print(f"INFO capture reopening: {reason}", file=sys.stderr, flush=True)
+            clog(f"reopening the card: {reason}")
             cap.release()
-            cap = None
+            cap, last_reopen, low_secs, black_secs = None, now, 0, 0
 
 
 def input_level(hint):
@@ -414,6 +464,7 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
     else:
         got = (int(cap.get(3)), int(cap.get(4)))
     print(f"INFO video {got[0]}x{got[1]} requested {w}x{h}@{fps}", file=sys.stderr, flush=True)
+    clog(f"viewer started: video {got[0]}x{got[1]} requested {w}x{h}@{fps}")
 
     boost_process()
     audio = None if no_audio else AudioProxy(audio_hint, volume / 100.0)
@@ -452,10 +503,20 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
         "Waiting for the capture card / video signal...", True, (230, 230, 230)))
     last_frame_t = time.time()
     last_n, shown, t_stat, age_sum = 0, 0, time.time(), 0.0
+    d_dropped, d_late, d_gap_max, d_presents, d_stall = 0, 0, 0.0, [], 0.0
+    t_new_prev, t_loop_prev, cap0 = None, time.perf_counter(), 0
     fullscreen, running, code = False, True, 0
     while running:
         frame, t_frame, n = slot.wait_new(last_n, timeout=0.004)
         if frame is not None and n != last_n:
+            d_dropped += n - last_n - 1 if last_n else 0  # captured but replaced before it was shown
+            tn = time.perf_counter()
+            if t_new_prev is not None:
+                gapm = (tn - t_new_prev) * 1000
+                d_gap_max = max(d_gap_max, gapm)
+                if gapm > 25:
+                    d_late += 1
+            t_new_prev = tn
             last_n = n
             if frame.shape[1] == got[0] and frame.shape[0] == got[1]:
                 surf = pygame.image.frombuffer(frame.data, got, "BGR")
@@ -492,7 +553,12 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
             msg.draw(dstrect=((ww - mw) // 2, (wh - mh) // 2, mw, mh))
         else:
             tex.draw(dstrect=((ww - dw) // 2, (wh - dh) // 2, dw, dh))
+        t_before = time.perf_counter()
         ren.present()  # waits for vsync
+        t_after = time.perf_counter()
+        d_presents.append(t_after - t_loop_prev)
+        d_stall = max(d_stall, (t_after - t_before) * 1000)
+        t_loop_prev = t_after
         now = time.time()
         if now - t_stat >= 5:
             print(f"STATS shown {shown / (now - t_stat):.0f} fps, capture->screen "
@@ -501,10 +567,18 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
                      if audio is not None else "")
                   + (" (muted)" if audio is not None and audio.muted else ""),
                   file=sys.stderr, flush=True)
+            per = sorted(d_presents)[len(d_presents) // 2] if d_presents else 0
+            print(f"DIAG captured {(last_n - cap0) / 5:.1f}/s, capture max gap {slot.take_gap():.0f} ms | "
+                  f"dropped before display {d_dropped}, late frames (>25 ms) {d_late}, "
+                  f"display max gap {d_gap_max:.0f} ms | present period {per * 1000:.2f} ms "
+                  f"(~{(1 / per if per else 0):.0f} Hz), longest present {d_stall:.0f} ms",
+                  file=sys.stderr, flush=True)
+            cap0, d_dropped, d_late, d_gap_max, d_presents, d_stall = last_n, 0, 0, 0.0, [], 0.0
             t_stat, shown, age_sum = now, 0, 0.0
     stop.set()
     if audio is not None:
         audio.close()
+    clog("viewer closed")
     if cap is not None:
         cap.release()
     pygame.quit()

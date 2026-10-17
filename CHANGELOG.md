@@ -17,6 +17,9 @@
   mode change) or the picture stays completely black for 10 s, it reopens the card; while the card
   cannot be opened it keeps retrying and shows "Waiting for the capture card / video signal..." instead
   of exiting or freezing on the last frame.
+- The capture window writes `%APPDATA%\mayflash_switch2_controller\capture.log` (problems, recoveries, a
+  once-a-minute heartbeat) and also reopens the card when its frame rate collapses to a crawl (the
+  UGREEN card falls to ~1 fps when its HDMI input drops).
 - The capture panel warns when Windows' own recording level for the card is low (the UGREEN card
   defaulted to 17%, which made it very quiet). Setting it to 100% in Settings > System > Sound > Input
   is the best fix; the slider is the second step.
