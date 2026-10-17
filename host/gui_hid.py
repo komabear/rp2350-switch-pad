@@ -300,7 +300,7 @@ def worker(sh):
                         sh.last_active[s] = t0
                 slot_sigs[s] = asig
         if conn != prev_conn or t0 >= next_labels:
-            next_labels = t0 + 3.0
+            next_labels = t0 + 30.0  # names rarely change; every HID query touches USB devices
             prev_conn = list(conn)
             threading.Thread(target=_refresh_labels, args=(sh, list(conn)), daemon=True).start()
         with sh.lock:
@@ -385,8 +385,16 @@ def worker(sh):
                 next_open = t0 + 1.0
                 consec_fail = 0
 
-        if t0 >= next_enum:  # is the pad port plugged into this PC by mistake?
-            next_enum = t0 + 1.0
+        # Is the pad port plugged into this PC by mistake? Only worth asking while the board link
+        # is NOT working, and rarely: listing HID devices makes Windows query every USB device,
+        # which can upset a capture card that is streaming.
+        healthy = dev is not None and t0 - last_ok < 1.0
+        if healthy:
+            if sh.pad_on_pc:
+                with sh.lock:
+                    sh.pad_on_pc = False
+        elif t0 >= next_enum:
+            next_enum = t0 + 5.0
             try:
                 on_pc = bool(hid.enumerate(0x20D6, 0xA713))
             except Exception:
