@@ -216,6 +216,13 @@ tools/     link_test.py, board_diag.py, tear_check.py, build_release.py
 `fw/` still contains the DualShock-4 / DInput / HORI identities from the abandoned Mayflash
 design; they are compiled in but unused (`DEFAULT_IDENTITY=3`).
 
+## License
+
+The code written for this project (`fw/` except `fw/pio_usb/`, `host/`, `tools/`) is under the
+[MIT License](LICENSE). Third-party code keeps its own licenses, listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); the license texts are in `licenses/` and in the
+`licenses/` folder of every release zip.
+
 ## Credits
 
 PIO-USB: [Pico-PIO-USB](https://github.com/sekigon-gonnoc/Pico-PIO-USB) (sekigon-gonnoc, MIT) via

@@ -1,0 +1,7 @@
+pygame-ce (https://github.com/pygame-community/pygame-ce) is licensed under the GNU Lesser General
+Public License, version 2.1 (see LGPL-2.1.txt in this folder). It is bundled as separate .pyd/.dll
+files (the "pygame" package folder and SDL2*.dll in the _internal folder), so it can be replaced with
+another build of pygame-ce. Its source code is available at the URL above.
+
+pygame-ce ships SDL2 (zlib license) and SDL2_image, SDL2_mixer, SDL2_ttf (zlib license) and the
+libraries those include; see https://www.libsdl.org/ and the upstream projects for their notices.

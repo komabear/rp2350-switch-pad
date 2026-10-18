@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Added the MIT `LICENSE`, `THIRD_PARTY_NOTICES.md` and a `licenses/` folder; the release zip now contains
+  the license texts of everything bundled (collected by `tools/build_release.py`).
+
 ## 0.1.4 - 2026-10-17
 
 - The capture window recognises the card's own "no valid video signal" picture (vertical stripes, every

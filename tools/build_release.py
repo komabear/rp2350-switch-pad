@@ -34,6 +34,37 @@ subprocess.check_call([
     "host/gui_hid.py",
 ])
 
+
+
+def collect_licenses():
+    """-> [(source path, path inside the zip's licenses/ folder)]: the license texts of the Python
+    packages bundled into the exe (read from the installed distributions), Python's own, and the
+    texts kept in this repo (pico-sdk, TinyUSB, PIO-USB)."""
+    from importlib import metadata
+
+    out = []
+    for dist_name, folder in (("hidapi", "hidapi"), ("opencv-python", "opencv-python"),
+                              ("numpy", "numpy"), ("sounddevice", "sounddevice"),
+                              ("pycaw", "pycaw"), ("comtypes", "comtypes"),
+                              ("pyserial", "pyserial"), ("pygame-ce", "pygame-ce")):
+        try:
+            dist = metadata.distribution(dist_name)
+        except metadata.PackageNotFoundError:
+            print(f"warning: {dist_name} is not installed, its license files are missing from the zip")
+            continue
+        for f in dist.files or []:
+            base = os.path.basename(str(f)).upper()
+            if str(f).replace("\\", "/").count("/") <= 2 and any(k in base for k in ("LICENSE", "COPYING", "NOTICE")):
+                out.append((str(dist.locate_file(f)), f"python-packages/{folder}/{os.path.basename(str(f))}"))
+    py_license = os.path.join(sys.base_prefix, "LICENSE.txt")
+    if os.path.exists(py_license):
+        out.append((py_license, "python-LICENSE.txt"))
+    for fn in sorted(os.listdir("licenses")):
+        out.append((os.path.join("licenses", fn), fn))
+    out.append((os.path.join("fw", "pio_usb", "LICENSE-Waveshare-Apache-2.0"), "pio-usb-Waveshare-Apache-2.0.txt"))
+    return out
+
+
 os.makedirs("release")
 shutil.copy(uf2, os.path.join("release", "bridge.uf2"))
 bundle = f"{name}-v{version}-windows"
@@ -46,4 +77,12 @@ with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
     z.write(uf2, os.path.join(bundle, "bridge.uf2"))
     z.write("README.md", os.path.join(bundle, "README.md"))
     z.write("CHANGELOG.md", os.path.join(bundle, "CHANGELOG.md"))
+    z.write("LICENSE", os.path.join(bundle, "LICENSE"))
+    z.write("THIRD_PARTY_NOTICES.md", os.path.join(bundle, "THIRD_PARTY_NOTICES.md"))
+    seen = set()
+    for src, arc in collect_licenses():
+        if arc not in seen and os.path.exists(src):
+            seen.add(arc)
+            z.write(src, os.path.join(bundle, "licenses", arc))
+    print(f"license files in the zip: {len(seen)}")
 print(f"\nbuilt {zpath} ({os.path.getsize(zpath) / 1e6:.0f} MB)")
