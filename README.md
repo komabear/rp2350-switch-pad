@@ -5,7 +5,8 @@
 Play your Nintendo Switch 2 remotely with friends over [Parsec](https://parsec.app). A Waveshare
 **RP2350-USB-C** board pretends to be a wired PowerA Switch controller, and a PC tool streams a
 gamepad to it. A built-in capture window shows the Switch's screen (video and audio) from an HDMI
-capture card, ready to share. **Tested end to end with Parsec guests.**
+capture card, ready to share. **Tested end to end with Parsec guests.** The PC app is **Windows only** for now
+(see [Platforms](#platforms)).
 
 ```
 Friend's pad ──Parsec──▶ your PC (Xbox 360 virtual pad)
@@ -43,7 +44,7 @@ The capture window uses `ffmpeg` only to list device names (`winget install Gyan
 
 - Waveshare RP2350-USB-C (two Type-C ports: **native/programming** and **PIO-USB**).
 - Two **data-capable** USB cables for the board (some charge-only cables fail silently).
-- Switch 2 dock, an HDMI capture card (UGREEN HDMI Capture tested, 1080p60), a Windows PC.
+- Switch 2 dock, an HDMI capture card (UGREEN HDMI Capture tested, 1080p60), a **Windows 10/11 PC**.
 
 ## Daily routine
 
@@ -189,6 +190,21 @@ Plug the **native** port into the PC, hold **BOOT**, tap **RST**, copy `fw/build
 
 Build the firmware first, then `py -m pip install pyinstaller` and `py tools/build_release.py`
 (output in `release/`).
+
+## Platforms
+
+**Windows only** (tested on Windows 11). The board firmware is platform independent, but the PC app is
+not:
+
+- gamepads are read through Windows' XInput, which also supplies the controller names and USB IDs;
+- the capture window uses DirectShow (video) and WASAPI (audio), plus a few Windows calls for process
+  priority and the card's recording level;
+- the release is a Windows exe.
+
+Linux and macOS are untested and **will not work as is**. A port would need a different gamepad backend
+(evdev or SDL joysticks), V4L2 plus PulseAudio/PipeWire for the capture window, and on Linux a udev rule
+so the board's USB HID link can be opened without root (and probably one that disables USB auto-suspend
+for it). Contributions welcome.
 
 ## Status and limits
 

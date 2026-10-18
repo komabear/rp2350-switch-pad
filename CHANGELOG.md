@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- README: states that the PC app is Windows only and what a Linux/macOS port would need.
+
 ## 0.1.5 - 2026-10-17
 
 - Added the MIT `LICENSE`, `THIRD_PARTY_NOTICES.md` and a `licenses/` folder; the release zip now contains
