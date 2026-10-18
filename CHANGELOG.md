@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.1.4 - 2026-10-17
 
 - The capture window recognises the card's own "no valid video signal" picture (vertical stripes, every
   row identical) and shows an explanation instead of the stripes: replug the card's USB cable (that is
   what fixed it in practice; the card had sat idle for two hours), else the HDMI cable, and check the
   Switch's video output. It also tries reopening the card now and then.
+- No firmware changes (`bridge.uf2` is identical to 0.1.0 - 0.1.3).
 
 ## 0.1.3 - 2026-10-17
 
