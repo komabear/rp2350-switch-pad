@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.1.5 - 2026-10-17
 
 - Added the MIT `LICENSE`, `THIRD_PARTY_NOTICES.md` and a `licenses/` folder; the release zip now contains
   the license texts of everything bundled (collected by `tools/build_release.py`).
+- The project is MIT licensed (copyright komabear).
+- No firmware changes (`bridge.uf2` is identical to 0.1.0 - 0.1.4).
 
 ## 0.1.4 - 2026-10-17
 
