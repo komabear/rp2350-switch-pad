@@ -479,6 +479,90 @@ def run_audio_only(hint, volume):
     return 0
 
 
+KB_MSG_ON = "KB "
+KB_MSG_OFF = "KBOFF "
+
+_KEYMAP = None
+WINDOW_KEYS = {"m", "f"}  # mute / fullscreen: always the window's (the remap dialog refuses them)
+
+
+def key_name(key):
+    """pygame key -> the name the GUI's key map uses, or None. Covers every key the remap dialog
+    accepts (gui_hid event_key_name): letters, digits (keypad too), comma, period, arrows."""
+    global _KEYMAP
+    if _KEYMAP is None:
+        import pygame  # only ever imported inside the viewer process
+        _KEYMAP = {k: chr(k) for k in range(ord("a"), ord("z") + 1)}
+        _KEYMAP.update({k: chr(k) for k in range(ord("0"), ord("9") + 1)})
+        _KEYMAP.update({getattr(pygame, f"K_KP_{d}"): str(d) for d in range(10)})
+        _KEYMAP.update({
+            pygame.K_COMMA: "comma", pygame.K_PERIOD: "period",
+            pygame.K_UP: "up", pygame.K_DOWN: "down",
+            pygame.K_LEFT: "left", pygame.K_RIGHT: "right",
+        })
+    return _KEYMAP.get(key)
+
+
+class KeyPipe:
+    """Forwards held keys + mouse state to the GUI process over stdin
+    ('KB <names>|<dx>,<dy>|<lmb>,<rmb>' lines). Sends the full state on every
+    change (idempotent; the GUI treats the latest line as the truth), so a
+    lost line self-heals on the next event."""
+
+    def __init__(self, proc, enabled_cb):
+        self.proc = proc              # subprocess with .stdin
+        self.enabled_cb = enabled_cb  # -> bool, checked live
+        self.held = set()
+        self.mx, self.my = 0.0, 0.0   # accumulated right-stick deflection -1..1
+        self.lmb = self.rmb = False
+
+    def _send(self, force=False):
+        if not force and not self.enabled_cb():
+            return
+        try:
+            names = " ".join(sorted(self.held))
+            msg = f"KB {names}|{self.mx:+.3f},{self.my:+.3f}|{int(self.lmb)},{int(self.rmb)}\n"
+            try:  # text-mode stream (the usual case: child's sys.stderr)
+                self.proc.write(msg)
+            except TypeError:  # binary stream
+                self.proc.write(msg.encode())
+            self.proc.flush()
+        except (OSError, ValueError, AttributeError):
+            pass
+
+    def press(self, name):
+        if name not in self.held:
+            self.held.add(name)
+            self._send()
+
+    def release(self, name):
+        if name in self.held:
+            self.held.discard(name)
+            self._send()
+
+    def mouse_move(self, dx, dy, sens=0.02):
+        if dx or dy:
+            self.mx = max(-1.0, min(1.0, self.mx + dx * sens))
+            self.my = max(-1.0, min(1.0, self.my + dy * sens))
+            self._send()
+
+    def mouse_button(self, left=None, right=None):
+        if left is not None and left != self.lmb:
+            self.lmb = left
+            self._send()
+        if right is not None and right != self.rmb:
+            self.rmb = right
+            self._send()
+
+    def clear(self):
+        changed = bool(self.held or self.mx or self.my or self.lmb or self.rmb)  # before held.clear()
+        self.held.clear()
+        self.mx = self.my = 0.0
+        self.lmb = self.rmb = False
+        if changed:
+            self._send(force=True)  # always: on focus loss the pad must not keep the keys held
+
+
 def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
     w, h, fps = MODES.get(mode, MODES[DEFAULT_MODE])
     cap = open_capture(vidx, w, h, fps)
@@ -500,13 +584,27 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
         if lvl is not None:
             print(f"LEVEL {lvl}", file=sys.stderr, flush=True)
 
-    def read_commands():  # "VOL <percent>" lines from the GUI process
+    # keyboard/mouse -> gamepad bridge: only while the window has focus and the
+    # GUI checkbox is on (the GUI toggles it via "KBON"/"KBOFF" stdin lines).
+    # Mouse: movement -> right stick, LMB -> A, RMB -> B.
+    kb_enabled = [False]   # off until the GUI says KBON
+    win_focused = [True]
+    kb = KeyPipe(sys.stderr, enabled_cb=lambda: kb_enabled[0] and win_focused[0])
+
+    def read_commands():  # control lines from the GUI process
         for raw in sys.stdin:
             try:
                 parts = raw.split()
                 if len(parts) == 2 and parts[0] == "VOL" and audio is not None:
                     audio.gain = max(0.0, min(10.0, int(parts[1]) / 100.0))
-            except ValueError:
+                elif parts and parts[0] == "KBON":
+                    kb_enabled[0] = True
+                elif parts and parts[0] == "KBOFF":
+                    kb_enabled[0] = False
+                    kb.clear()
+                elif parts and parts[0] == "QUIT":
+                    break
+            except (ValueError, IndexError):
                 pass
 
     if sys.stdin is not None:
@@ -562,13 +660,39 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
             shown += 1
             last_frame_t = time.time()
             age_sum += (time.perf_counter() - t_frame) * 1000
+        kb_enabled[0] = kb_enabled[0] and True  # toggled from stdin
         for e in pygame.event.get():
             if e.type in (pygame.QUIT, pygame.WINDOWCLOSE):
                 running = False
-            elif e.type == pygame.MOUSEWHEEL and audio is not None:
-                audio.gain = max(0.0, min(10.0, audio.gain + 0.2 * e.y))
+            elif e.type == pygame.WINDOWFOCUSGAINED:
+                win_focused[0] = True
+            elif e.type == pygame.WINDOWFOCUSLOST:
+                win_focused[0] = False
+                kb.clear()
+            elif e.type == pygame.MOUSEWHEEL:
+                if audio is not None:
+                    audio.gain = max(0.0, min(10.0, audio.gain + 0.2 * e.y))
+            elif e.type == pygame.MOUSEMOTION:
+                if kb_enabled[0] and win_focused[0]:
+                    try:
+                        kb.mouse_move(e.rel[0], e.rel[1])
+                    except Exception:
+                        pass
+            elif e.type == pygame.MOUSEBUTTONDOWN:
+                if e.button == 1:
+                    kb.mouse_button(left=True)
+                elif e.button == 3:
+                    kb.mouse_button(right=True)
+            elif e.type == pygame.MOUSEBUTTONUP:
+                if e.button == 1:
+                    kb.mouse_button(left=False)
+                elif e.button == 3:
+                    kb.mouse_button(right=False)
             elif e.type == pygame.KEYDOWN:
-                if e.key in (pygame.K_q, pygame.K_ESCAPE):
+                name = key_name(e.key)
+                if name and name not in WINDOW_KEYS and kb_enabled[0] and win_focused[0]:
+                    kb.press(name)  # keyboard control on: Q and the arrows belong to the pad
+                elif e.key in (pygame.K_q, pygame.K_ESCAPE):
                     running = False
                 elif e.key == pygame.K_m and audio is not None:
                     audio.muted = not audio.muted
@@ -582,6 +706,20 @@ def run_viewer(vidx, audio_hint, mode, no_audio=False, volume=100):
                         win.set_fullscreen(True)
                     else:
                         win.set_windowed()
+            elif e.type == pygame.KEYUP:
+                name = key_name(e.key)
+                if name:
+                    kb.release(name)
+        # right-stick decay toward center (mouse deltas accumulate; decay keeps
+        # the stick responsive to small movements and re-centers on stop)
+        if kb_enabled[0] and (abs(kb.mx) > 0.001 or abs(kb.my) > 0.001):
+            kb.mx *= 0.90
+            kb.my *= 0.90
+            try:
+                kb._send()
+            except Exception:
+                pass
+
         ww, wh = win.size  # fit the picture into the window, keep the aspect ratio
         sc = min(ww / got[0], wh / got[1])
         dw, dh = int(got[0] * sc), int(got[1] * sc)
@@ -637,6 +775,7 @@ class Viewer:
         self.error = ""
         self.stats = ""
         self.level = None  # Windows recording level of the capture device (percent)
+        self.kb_state = ""  # latest "keys|rx,ry|lmb,rmb" from the viewer window
 
     def running(self):
         return self.proc is not None and self.proc.poll() is None
@@ -677,8 +816,21 @@ class Viewer:
                     self.level = int(line[6:])
                 except ValueError:
                     pass
+            elif line.startswith("KB "):
+                self.kb_state = line[3:]
+                continue  # high-rate: don't buffer
             self.lines.append(line[-200:])
             del self.lines[:-30]
+
+    def send_kb_enabled(self, on):
+        if self.running():
+            try:
+                self.proc.stdin.write(("KBON\n" if on else "KBOFF\n").encode())
+                self.proc.stdin.flush()
+            except (OSError, ValueError):
+                pass
+        if not on:
+            self.kb_state = ""
 
     def send_volume(self, percent):
         if self.running():
@@ -690,6 +842,7 @@ class Viewer:
 
     def stop(self):
         p, self.proc = self.proc, None
+        self.kb_state = ""
         if p is not None and p.poll() is None:
             p.terminate()
             try:

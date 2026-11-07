@@ -45,6 +45,24 @@ def load_settings():
         return {}
 
 
+def load_profiles():
+    """-> (profiles dict, active profile name) from settings, normalized:
+    always contains "Default"; unknown active name falls back to Default."""
+    s = load_settings()
+    profiles = s.get("kb_profiles")
+    if not isinstance(profiles, dict):
+        profiles = {}
+    profiles.setdefault("Default", {})  # empty = pure defaults
+    active = s.get("kb_profile")
+    if active not in profiles:
+        active = "Default"
+    return profiles, active
+
+
+def save_profiles(profiles, active):
+    save_settings({"kb_profiles": profiles, "kb_profile": active})
+
+
 def save_settings(d):
     try:
         os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
@@ -230,6 +248,8 @@ class Shared:
         self.pad_on_pc = False  # the board's pad port is plugged into THIS PC
         self.home = False
         self.capture = False
+        self.kb_enabled = False  # keyboard/mouse -> gamepad checkbox
+        self.kb_state = ""       # latest raw KB line from the capture window
         # outputs
         self.connected = [False] * SLOTS
         self.labels = [f"{i + 1}: (not connected)" for i in range(SLOTS)]
@@ -308,6 +328,8 @@ def worker(sh):
             enabled, home, cap = sh.send_enabled, sh.home, sh.capture
             swap = sh.swap_abxy
             keepalive = sh.keepalive
+            kb_on = sh.kb_enabled
+            kb_state = sh.kb_state
         if auto:
             slot = next((s for s in range(SLOTS) if conn[s]), None)
         else:
@@ -326,7 +348,14 @@ def worker(sh):
         if dev is not None:
             use = gp if (gp is not None and enabled) else bridge.NEUTRAL_GAMEPAD
             if swap and use is gp:
-                use = swap_abxy(gp)
+                use = swap_abxy(gp)  # before the keyboard merge, so held pad buttons stay swapped
+            kb_gp, kb_home, kb_cap = None, False, False
+            if kb_on:
+                kb = bridge.kb_parse(kb_state)
+                kb_gp = bridge.kb_merge_full(use, kb)
+                kb_home, kb_cap = bridge.kb_home_capture(kb)
+            if kb_gp is not None:
+                use = kb_gp
 
             # keep-alive: if nothing changed for KEEPALIVE_S, send a tiny input
             # (3 frames of 10% right-stick) so neither the board nor the
@@ -348,7 +377,7 @@ def worker(sh):
                 out.sThumbRY = 3300  # ~10% of full scale
                 use = out
             frame = bridge.build_frame(
-                use, home=home or (guide and enabled), capture=cap
+                use, home=home or kb_home or (guide and enabled), capture=cap or kb_cap
             )
             seq = (seq + 1) & 0xFF
             ok = dev.send_feature_report(bh.to_report(frame, seq)) >= 0
@@ -467,7 +496,9 @@ class App:
         # ---- controller picker
         box = ttk.LabelFrame(root, text="Controller to send to the Switch")
         box.grid(row=0, column=0, sticky="we", **pad)
-        self.mode = tk.StringVar(value="auto")
+        s0 = load_settings()
+        self.mode = tk.StringVar(
+            value="manual" if s0.get("picker_mode") == "manual" else "auto")
         ttk.Radiobutton(
             box, text="Auto (first available)", value="auto",
             variable=self.mode, command=self.apply_mode,
@@ -559,10 +590,12 @@ class App:
         self.cap_audio_cb = ttk.Combobox(cf, textvariable=self.cap_audio, width=44, state="readonly")
         self.cap_audio_cb.grid(row=1, column=1, columnspan=2, sticky="w", pady=2)
         ttk.Label(cf, text="Quality:").grid(row=2, column=0, sticky="e", padx=(8, 4), pady=2)
-        ttk.Combobox(
+        cap_mode_cb = ttk.Combobox(
             cf, textvariable=self.cap_mode, width=14, state="readonly",
             values=list(cap.MODES),
-        ).grid(row=2, column=1, sticky="w", pady=2)
+        )
+        cap_mode_cb.grid(row=2, column=1, sticky="w", pady=2)
+        cap_mode_cb.bind("<<ComboboxSelected>>", lambda e: self.save_capture())
         self.cap_btn = ttk.Button(cf, text="Open capture window", width=22, command=self.toggle_capture)
         self.cap_btn.grid(row=2, column=2, sticky="e", padx=8, pady=2)
         ttk.Label(cf, text="Volume:").grid(row=3, column=0, sticky="e", padx=(8, 4), pady=2)
@@ -584,7 +617,8 @@ class App:
         # ---- bottom row
         bot = ttk.Frame(root)
         bot.grid(row=4, column=0, sticky="we", **pad)
-        self.send_var = tk.BooleanVar(value=True)
+        self.send_var = tk.BooleanVar(
+            value=bool(load_settings().get("send_enabled", True)))
         ttk.Checkbutton(
             bot, text="Send inputs to Switch", variable=self.send_var,
             command=self.apply_mode,
@@ -604,16 +638,321 @@ class App:
             bot, text="Keep-alive (nudge after 30 s idle)", variable=self.keep_var,
             command=self.apply_mode,
         ).pack(side="left", padx=(14, 0))
+        self.kb_var = tk.BooleanVar(
+            value=bool(load_settings().get("kb_controls", False))
+        )
+        ttk.Checkbutton(
+            bot, text="Keyboard/mouse -> gamepad (capture window)",
+            variable=self.kb_var, command=self.apply_mode,
+        ).pack(side="left", padx=(14, 0))
+        ttk.Button(
+            bot, text="Remap keys...", width=12, command=self.open_remap
+        ).pack(side="left", padx=(6, 0))
+        # profile picker: switching applies the profile's map immediately
+        self.profile_var = tk.StringVar()
+        self.profile_cb = ttk.Combobox(
+            bot, textvariable=self.profile_var, state="readonly", width=12
+        )
+        self.profile_cb.pack(side="left", padx=(8, 0))
+        self.profile_cb.bind("<<ComboboxSelected>>", lambda e: self.on_profile_switch())
+        ttk.Button(bot, text="Save as", width=7, command=self.profile_save_as).pack(
+            side="left", padx=(4, 0))
+        ttk.Button(bot, text="Duplicate", width=8, command=self.profile_duplicate).pack(
+            side="left", padx=(4, 0))
+        ttk.Button(bot, text="Rename", width=7, command=self.profile_rename).pack(
+            side="left", padx=(4, 0))
+        ttk.Button(bot, text="Del", width=4, command=self.profile_delete).pack(
+            side="left", padx=(4, 0))
+        self.kb_summary = tk.StringVar(value="")
+        ttk.Label(bot, textvariable=self.kb_summary, foreground="#666666").pack(
+            side="left", padx=(8, 0)
+        )
         for name, attr in (("CAPTURE", "capture"), ("HOME", "home")):
             b = ttk.Button(bot, text=name, width=10)
             b.pack(side="right", padx=4)
             b.bind("<ButtonPress-1>", lambda e, a=attr: self.hold(a, True))
             b.bind("<ButtonRelease-1>", lambda e, a=attr: self.hold(a, False))
 
+        # restore the picked controller (combo fills later via refresh_combo)
+        self.manual_slot_restore = int(load_settings().get("picker_slot", 0))
         self.apply_mode()  # push restored settings to the worker
+        self.profile_refresh(keep_current=False)
         root.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh_combo([False] * SLOTS)
         self.tick()
+
+    # ---- profiles
+    def profile_refresh(self, keep_current=True):
+        """Reload the dropdown values from settings; select the active profile."""
+        profiles, active = load_profiles()
+        names = sorted(profiles.keys(), key=lambda n: (n != "Default", n.lower()))
+        self.profile_cb["values"] = names
+        if keep_current and self.profile_var.get() in names:
+            self.profile_var.set(self.profile_var.get())
+        else:
+            self.profile_var.set(active)
+
+    def on_profile_switch(self):
+        name = self.profile_var.get()
+        profiles, _ = load_profiles()
+        saved = profiles.get(name)
+        bridge.load_kb_map(saved or dict(bridge.DEFAULT_KB_MAP))  # {} = defaults
+        # persist choice + mirror into the flat key the worker/consumer reads
+        save_profiles(profiles, name)
+        save_settings({"kb_map": bridge.get_kb_map()})
+        if getattr(self, "remap_win", None) is not None and self.remap_win.winfo_exists():
+            self.remap_win.destroy()  # rebuild against the new map
+            self.open_remap()
+        self.refresh_kb_summary()
+
+    def profile_save_as(self):
+        """Snapshot the map currently in effect under a new profile name."""
+        name = self._prompt_name("Save profile as")
+        if not name:
+            return
+        profiles, _ = load_profiles()
+        profiles[name] = dict(bridge.get_kb_map())
+        save_profiles(profiles, name)
+        self.profile_refresh(keep_current=False)
+        self.profile_var.set(name)
+
+    def _prompt_name(self, title, initial=""):
+        """Modal name prompt -> name or None. Enter = OK."""
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.resizable(False, False)
+        win.transient(self.root)
+        win.grab_set()
+        ttk.Label(win, text="Profile name:").pack(anchor="w", padx=10, pady=(10, 2))
+        var = tk.StringVar(value=initial)
+        ent = ttk.Entry(win, textvariable=var, width=24)
+        ent.pack(padx=10, pady=2)
+        ent.selection_range(0, "end")
+        ent.focus_set()
+        result = []
+
+        def do_ok(_=None):
+            name = var.get().strip()
+            if name:
+                result.append(name)
+                win.destroy()
+
+        ent.bind("<Return>", do_ok)
+        ttk.Button(win, text="OK", command=do_ok).pack(pady=(4, 10))
+        # wait like a modal dialog so the caller gets the answer synchronously
+        win.wait_window()
+        return result[0] if result else None
+
+    def profile_duplicate(self):
+        """Clone the selected profile under a new name (user prompted, default
+        name '<selected> copy'), then switch to the clone."""
+        src = self.profile_var.get()
+        profiles, _ = load_profiles()
+        base = f"{src} copy"
+        name, i = base, 2
+        while name in profiles:
+            name, i = f"{src} copy {i}", i + 1
+        name = self._prompt_name("Duplicate profile", initial=name)
+        if not name or name == src:
+            return
+        profiles[name] = profiles.get(src) or dict(bridge.DEFAULT_KB_MAP)
+        save_profiles(profiles, name)
+        self.profile_refresh(keep_current=False)
+        self.profile_var.set(name)
+        self.on_profile_switch()
+
+    def profile_rename(self):
+        """Rename the selected profile in place (stays active if it was)."""
+        src = self.profile_var.get()
+        if src == "Default":
+            return  # Default is the fixed fallback, not renameable
+        profiles, _ = load_profiles()
+        name = self._prompt_name("Rename profile", initial=src)
+        if not name or name == src or name in profiles:
+            return
+        profiles[name] = profiles.pop(src)
+        active = "Default"
+        _, active = load_profiles()
+        if active == src:
+            active = name
+        save_profiles(profiles, active)
+        self.profile_refresh(keep_current=False)
+        self.profile_var.set(name)
+
+    def profile_delete(self):
+        name = self.profile_var.get()
+        if name == "Default":
+            return
+        profiles, _ = load_profiles()
+        profiles.pop(name, None)
+        save_profiles(profiles, "Default")
+        self.profile_var.set("Default")
+        self.on_profile_switch()
+
+    # ---- remap dialog
+    # rows: (function, physical-name-or-None); RESERVED keys can't be bound
+    RESERVED = {"m", "f"}  # Esc cancels a binding; Q is bindable (it closes the window only while keyboard control is off)
+    FUNC_LABELS = [
+        ("A", "A (bottom face)"), ("B", "B (right face)"),
+        ("X", "X (top face)"), ("Y", "Y (left face)"),
+        ("L", "L (shoulder)"), ("R", "R (shoulder)"),
+        ("ZL", "ZL (trigger)"), ("ZR", "ZR (trigger)"),
+        ("MINUS", "Minus  -"), ("PLUS", "Plus  +"),
+        ("L3", "L3 (stick click)"), ("R3", "R3 (stick click)"),
+        ("HOME", "Home"), ("CAPTURE", "Capture"),
+        ("LS_UP", "Left stick up"), ("LS_DOWN", "Left stick down"),
+        ("LS_LEFT", "Left stick left"), ("LS_RIGHT", "Left stick right"),
+        ("UP", "D-pad up"), ("DOWN", "D-pad down"),
+        ("LEFT", "D-pad left"), ("RIGHT", "D-pad right"),
+        ("MOUSE_MOVE", "Mouse movement -> right stick"),
+    ]
+
+    @staticmethod
+    def key_label(p):
+        if p is None:
+            return "(none)"
+        return {
+            "lmb": "Mouse LMB", "rmb": "Mouse RMB", "mouse_move": "Mouse move",
+            "comma": ",", "period": ".", "up": "Arrow Up", "down": "Arrow Down",
+            "left": "Arrow Left", "right": "Arrow Right",
+            "1": "1", "2": "2",
+        }.get(p, p.upper() if len(p) == 1 else p.capitalize())
+
+    def open_remap(self):
+        if getattr(self, "remap_win", None) is not None and self.remap_win.winfo_exists():
+            self.remap_win.lift()
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Remap keyboard / mouse")
+        win.resizable(False, False)
+        self.remap_win = win
+        self.remap_rows = {}
+        ttk.Label(
+            win, wraplength=430, justify="left", foreground="#555555",
+            text=("Click a binding, then press the new key (or click the mouse "
+                  "button you want). Right-click a binding to unbind, Esc to cancel. "
+                  "Reserved in the capture window: Esc = close, M = mute, F = fullscreen. "
+                  "While keyboard control is on, Q and the arrow keys go to the pad."),
+        ).pack(anchor="w", padx=10, pady=(8, 4))
+
+        grid = ttk.Frame(win)
+        grid.pack(padx=10, pady=2)
+        kmap = bridge.get_kb_map()
+        used = {}
+        for phys, func in kmap.items():
+            if func:
+                used.setdefault(func, []).append(phys)
+        for i, (func, label) in enumerate(self.FUNC_LABELS):
+            r, c = divmod(i, 2)
+            ttk.Label(grid, text=label, width=24).grid(row=r, column=c * 2, sticky="w", pady=1)
+            phys_list = used.get(func, [])
+            phys = phys_list[0] if phys_list else None
+            txt = self.key_label(phys)
+            b = ttk.Button(grid, text=txt, width=13)
+            b.grid(row=r, column=c * 2 + 1, sticky="w", padx=(6, 14), pady=1)
+            b.bind("<Button-1>", lambda e, f=func, btn=b: self.remap_listen(f, btn))
+            b.bind("<Button-3>", lambda e, f=func, btn=b: self.remap_set(f, None, btn))
+            self.remap_rows[func] = (b, phys)
+        ttk.Button(win, text="Reset to defaults", command=self.remap_reset).pack(
+            anchor="w", padx=10, pady=(6, 4))
+        win.transient(self.root)
+        win.grab_set()
+        self.refresh_kb_summary()
+
+    def remap_listen(self, func, btn):
+        btn.config(text="press a key...")
+        def key(e):
+            # ignore plain modifiers; Esc cancels, reserved keys are refused
+            name = self.event_key_name(e)
+            self.remap_win.unbind("<Key>") if self.remap_win else None
+            self.remap_mouse_unbind()
+            if e.keysym == "Escape":
+                pass  # cancel
+            elif name is None:  # modifier or unsupported key: keep listening
+                self.remap_win.bind("<Key>", key)
+                return
+            elif name in self.RESERVED:
+                btn.config(text="reserved!")
+                self.remap_win.after(900, lambda: self.remap_refresh_row(func))
+                return
+            else:
+                self.remap_set(func, name, btn, from_event=True)
+            self.remap_refresh_row(func)
+        def mclick(e):
+            self.remap_win.unbind("<Key>")
+            self.remap_mouse_unbind()
+            name = {1: "lmb", 3: "rmb"}.get(e.num)
+            if name:
+                self.remap_set(func, name, btn, from_event=True)
+            self.remap_refresh_row(func)
+        self.remap_win.bind("<Key>", key)
+        self.remap_win.bind("<Button-1>", mclick, add="+")
+        self.remap_win.bind("<Button-3>", mclick, add="+")
+        # swallow the initiating click so it isn't captured as a binding
+        self.remap_win.after_idle(lambda: self.remap_win.unbind("<Button-1>"))
+        self.remap_win.focus_set()
+
+    def remap_mouse_unbind(self):
+        try:
+            self.remap_win.unbind("<Button-1>")
+            self.remap_win.unbind("<Button-3>")
+        except Exception:
+            pass
+
+    @staticmethod
+    def event_key_name(e):
+        if e.keysym in ("Shift_L", "Shift_R", "Control_L", "Control_R",
+                        "Alt_L", "Alt_R", "Meta_L", "Meta_R"):
+            return None
+        special = {"comma": "comma", "period": "period", "Up": "up",
+                   "Down": "down", "Left": "left", "Right": "right",
+                   "KP_1": "1", "KP_2": "2", "KP_Up": "up", "KP_Down": "down",
+                   "KP_Left": "left", "KP_Right": "right"}
+        if e.keysym in special:
+            return special[e.keysym]
+        if len(e.keysym) == 1:
+            return e.keysym.lower()
+        return None  # unsupported keys (F-keys etc.) are ignored
+
+    def remap_set(self, func, phys, btn, from_event=False):
+        bridge.set_binding(phys, func)  # releases conflicts, fires the save hook
+        # a physical name can only serve one function; clear any other row that
+        # showed it before (dialog-level consistency)
+        for f2, (b2, p2) in self.remap_rows.items():
+            if f2 != func and p2 == phys:
+                self.remap_rows[f2] = (b2, None)
+        self.remap_rows[func] = (btn, phys)
+
+    def remap_refresh_row(self, func):
+        if not (self.remap_win and self.remap_win.winfo_exists()):
+            return
+        btn, _ = self.remap_rows[func]
+        cur = None
+        for p, f in bridge.get_kb_map().items():
+            if f == func:
+                cur = p
+                break
+        self.remap_rows[func] = (btn, cur)
+        btn.config(text=self.key_label(cur))
+        self.refresh_kb_summary()
+
+    def remap_reset(self):
+        bridge.load_kb_map(dict(bridge.DEFAULT_KB_MAP))
+        if bridge._kb_map_hook:
+            bridge._kb_map_hook(bridge.get_kb_map())
+        self.remap_win.destroy()
+        self.open_remap()  # rebuild all rows from the restored map
+        self.refresh_kb_summary()
+
+    def refresh_kb_summary(self):
+        kmap = bridge.get_kb_map()
+        by_func = {}
+        for p, f in kmap.items():
+            if f and p not in ("lmb", "rmb", "mouse_move"):
+                by_func.setdefault(f, []).append(self.key_label(p))
+        order = ["A", "B", "X", "Y", "ZL", "ZR"]
+        parts = [f"{f}:{'/'.join(by_func[f])}" for f in order if f in by_func]
+        self.kb_summary.set("  ".join(parts))
 
     # ---- actions
     def hold(self, attr, val):
@@ -621,6 +960,7 @@ class App:
             setattr(self.sh, attr, val)
 
     def apply_mode(self):
+        kb_on = self.kb_var.get()
         with self.sh.lock:
             self.sh.mode_auto = self.mode.get() == "auto"
             idx = self.combo.current()
@@ -628,15 +968,26 @@ class App:
             self.sh.send_enabled = self.send_var.get()
             self.sh.swap_abxy = self.swap_var.get()
             self.sh.keepalive = self.keep_var.get()
+            self.sh.kb_enabled = kb_on
+            if not kb_on:
+                self.sh.kb_state = ""
         save_settings({"swap_abxy": self.swap_var.get(),
-                       "keepalive": self.keep_var.get()})
+                       "keepalive": self.keep_var.get(),
+                       "kb_controls": kb_on,
+                       "send_enabled": self.send_var.get(),
+                       "picker_mode": self.mode.get(),
+                       "picker_slot": self.combo.current() if self.combo.current() >= 0 else 0})
+        # tell the capture window (if open) to forward or stop forwarding keys
+        self.viewer.send_kb_enabled(kb_on)
 
     def refresh_combo(self, conn, labels=None):
         cur = self.combo.current()
         vals = list(labels) if labels else [f"{i + 1}: (not connected)" for i in range(SLOTS)]
         if list(self.combo["values"]) != vals:
             self.combo["values"] = vals
-        self.combo.current(cur if cur >= 0 else 0)
+        if cur < 0:  # first fill: restore the saved picked controller
+            cur = min(max(getattr(self, "manual_slot_restore", 0), 0), SLOTS - 1)
+        self.combo.current(cur)
 
     def dot(self, key, color, text):
         c, item = self.dots[key]
@@ -683,6 +1034,8 @@ class App:
                                  self.cap_audio.get(), self.cap_mode.get(),
                                  volume=int(round(self.cap_vol.get())) * 10):
             self.cap_status.set("Could not start: " + self.viewer.error)
+        else:
+            self.viewer.send_kb_enabled(self.kb_var.get())
 
     def update_capture(self):
         state, msg = self.viewer.state()
@@ -807,6 +1160,9 @@ class App:
             self.cv.coords(self.trig[k], 10, y0, 10 + v / 255 * 230, y0 + 12)
 
         self.update_capture()
+        with sh.lock:
+            sh.kb_state = (self.viewer.kb_state
+                           if self.kb_var.get() and self.viewer.running() else "")
         self.root.after(80, self.tick)
 
 
@@ -851,6 +1207,19 @@ def main():
         sys.exit(1)
     setup_logging()
     keep_process_responsive()
+    profiles, active = load_profiles()
+    # a profile stored as {} means "pure defaults"; otherwise its saved map
+    bridge.load_kb_map(profiles[active] or dict(bridge.DEFAULT_KB_MAP))
+
+    def on_map_changed(m):
+        """Persistence for binding edits: update the flat key AND the profile
+        the edit happened under."""
+        save_settings({"kb_map": m})
+        profiles, active2 = load_profiles()
+        profiles[active2] = dict(m)
+        save_profiles(profiles, active2)
+
+    bridge.set_kb_map_hook(on_map_changed)
     log.info("GUI started")
     root = tk.Tk()
     App(root)

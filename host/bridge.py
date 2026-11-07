@@ -178,6 +178,218 @@ def build_frame(gp, home=False, capture=False):
 NEUTRAL_GAMEPAD = XINPUT_GAMEPAD(0, 0, 0, 0, 0, 0, 0)
 
 
+# ---------------------------------------------------- keyboard -> gamepad ---
+# Physical layout mirrors a controller grip: right hand on I/J/K/L (the face
+# button diamond), left hand on WASD + Q/E + 1/2. While keyboard control is on,
+# the capture window gives Q and the arrow keys to the pad (Esc still closes it).
+#
+# Bindings are configurable: physical name -> function name (see FUNC_TO_*).
+# DEFAULT_KB_MAP mirrors the original hardcoded tables; the GUI can override
+# individual bindings at runtime (get_kb_map / set_binding).
+
+# function name -> XInput button bit (d-pad bits are handled separately)
+FUNC_TO_XINPUT = {
+    "Y": XINPUT_GAMEPAD_Y,
+    "B": XINPUT_GAMEPAD_B,
+    "A": XINPUT_GAMEPAD_A,
+    "X": XINPUT_GAMEPAD_X,
+    "L": XINPUT_GAMEPAD_LEFT_SHOULDER,
+    "R": XINPUT_GAMEPAD_RIGHT_SHOULDER,
+    "MINUS": XINPUT_GAMEPAD_BACK,
+    "PLUS": XINPUT_GAMEPAD_START,
+    "L3": XINPUT_GAMEPAD_LEFT_THUMB,
+    "R3": XINPUT_GAMEPAD_RIGHT_THUMB,
+}
+FUNC_TO_DPAD = {
+    "UP": XINPUT_GAMEPAD_DPAD_UP,
+    "DOWN": XINPUT_GAMEPAD_DPAD_DOWN,
+    "LEFT": XINPUT_GAMEPAD_DPAD_LEFT,
+    "RIGHT": XINPUT_GAMEPAD_DPAD_RIGHT,
+}
+FUNC_TO_STICK = {
+    "LS_UP": (0, 1), "LS_DOWN": (0, -1), "LS_LEFT": (-1, 0), "LS_RIGHT": (1, 0),
+}
+FUNC_TO_TRIGGER = {"ZL": "bLeftTrigger", "ZR": "bRightTrigger"}
+# functions handled outside the button merge (build_frame args)
+FUNC_SPECIAL = {"HOME", "CAPTURE", "MOUSE_MOVE"}
+
+ALL_FUNCS = sorted(
+    list(FUNC_TO_XINPUT) + list(FUNC_TO_DPAD) + list(FUNC_TO_STICK)
+    + list(FUNC_TO_TRIGGER) + ["HOME", "CAPTURE", "(none)"]
+)
+
+DEFAULT_KB_MAP = {
+    "i": "Y", "j": "X", "k": "A", "l": "B",
+    "u": "ZL", "o": "ZR", "q": "L", "e": "R",
+    "1": "MINUS", "2": "PLUS", "comma": "L3", "period": "R3",
+    "h": "HOME", "g": "CAPTURE",
+    "w": "LS_UP", "a": "LS_LEFT", "s": "LS_DOWN", "d": "LS_RIGHT",
+    "up": "UP", "down": "DOWN", "left": "LEFT", "right": "RIGHT",
+    "lmb": "A", "rmb": "B",
+}
+
+_kb_map = None  # None = use DEFAULT_KB_MAP
+
+
+def get_kb_map():
+    """-> the active physical-name -> function-name map (defaults + overrides)."""
+    return dict(DEFAULT_KB_MAP if _kb_map is None else _kb_map)
+
+
+def set_binding(physical, func):
+    """Bind a physical key/mouse name to a function (or None = unbind).
+    Enforces one function per binding: another physical name already bound to
+    `func` is moved to (none). Saves to settings via the gui save_settings hook
+    if installed (set_kb_map_hook)."""
+    global _kb_map
+    if _kb_map is None:
+        _kb_map = dict(DEFAULT_KB_MAP)
+    if func is None or func == "(none)":
+        _kb_map[physical] = None
+    else:
+        for p, f in list(_kb_map.items()):
+            if f == func and p != physical:
+                _kb_map[p] = None  # conflict: old binding released
+        _kb_map[physical] = func
+    if _kb_map_hook is not None:
+        try:
+            _kb_map_hook(_kb_map)
+        except Exception:
+            pass
+
+
+_kb_map_hook = None
+
+
+def set_kb_map_hook(hook):
+    """Install callable(map) invoked after every set_binding (GUI persistence)."""
+    global _kb_map_hook
+    _kb_map_hook = hook
+
+
+def load_kb_map(saved):
+    """Replace the active map with a dict from settings (unknown physical
+    names / functions are ignored, missing ones keep defaults)."""
+    global _kb_map
+    merged = dict(DEFAULT_KB_MAP)
+    known_physical = set(DEFAULT_KB_MAP) | {"lmb", "rmb", "mouse_move"}
+
+    def _known_physical(p):
+        # fixed vocabulary + any plausible key name (single char, or a short
+        # lowercase token like "comma"/"up"): user bindings may use keys that
+        # are not in the shipped defaults
+        return p in known_physical or (
+            isinstance(p, str) and p and len(p) <= 8
+            and (len(p) == 1 or p.isalpha()))
+
+    if isinstance(saved, dict):
+        for p, f in saved.items():
+            if not _known_physical(p):
+                continue  # typo or stale entry: drop
+            if f is None or f == "(none)":
+                merged[p] = None
+            elif f in FUNC_TO_XINPUT or f in FUNC_TO_DPAD or f in FUNC_TO_STICK \
+                    or f in FUNC_TO_TRIGGER or f in FUNC_SPECIAL:
+                merged[p] = f
+    _kb_map = merged
+
+
+def kb_parse(state_str):
+    """Parse the viewer's KB state line "keys|rx,ry|lmb,rmb" ->
+    dict with keys (set), rx, ry (floats -1..1), lmb, rmb (bool), or None."""
+    if not state_str:
+        return None
+    try:
+        keys_part, stick_part, mouse_part = state_str.split("|")
+        keys = set(keys_part.split()) if keys_part else set()
+        rx_s, ry_s = stick_part.split(",")
+        lmb_s, rmb_s = mouse_part.split(",")
+        return {"keys": keys, "rx": float(rx_s), "ry": float(ry_s),
+                "lmb": lmb_s == "1", "rmb": rmb_s == "1"}
+    except (ValueError, IndexError):
+        return None
+
+
+def kb_merge_full(gp, kb):
+    """Merge parsed KB state (kb_parse result) into gp -> NEW XINPUT_GAMEPAD
+    or None if nothing contributes. Uses the active binding map."""
+    if kb is None:
+        return None
+    kmap = get_kb_map()
+    keys = set(kb["keys"])
+    if kb["lmb"]:
+        keys.add("lmb")
+    if kb["rmb"]:
+        keys.add("rmb")
+    if not keys:
+        return None
+
+    out = XINPUT_GAMEPAD()
+    ctypes.pointer(out)[0] = gp  # struct copy
+    changed = False
+    buttons = out.wButtons
+    dpad = 0
+    lx = ly = 0
+    for k in keys:
+        func = kmap.get(k)
+        if not func or func == "(none)":
+            continue
+        bit = FUNC_TO_XINPUT.get(func)
+        if bit:
+            buttons |= bit
+            changed = True
+            continue
+        tattr = FUNC_TO_TRIGGER.get(func)
+        if tattr:
+            setattr(out, tattr, 255)
+            changed = True
+            continue
+        if func in FUNC_TO_DPAD:
+            dpad |= FUNC_TO_DPAD[func]
+            changed = True
+            continue
+        if func in FUNC_TO_STICK:
+            dx, dy = FUNC_TO_STICK[func]
+            lx += dx
+            ly += dy
+            changed = True
+
+    if dpad:
+        buttons = (buttons & ~0x000F) | dpad
+    out.wButtons = buttons
+    if lx or ly:
+        out.sThumbLX = max(-32767, min(32767, lx * 32767))
+        out.sThumbLY = max(-32767, min(32767, ly * 32767))
+
+    # mouse movement -> right stick (only while the mouse_move binding stays
+    # on its default; if rebound away, the stick is left alone)
+    if kmap.get("mouse_move", "MOUSE_MOVE") == "MOUSE_MOVE":
+        if abs(kb["rx"]) > 0.001 or abs(kb["ry"]) > 0.001:
+            out.sThumbRX = max(-32767, min(32767, int(kb["rx"] * 32767)))
+            out.sThumbRY = max(-32767, min(32767, int(kb["ry"] * 32767)))
+            changed = True
+
+    return out if changed else None
+
+
+def kb_home_capture(kb):
+    """-> (home, capture): whether a key or mouse button bound to HOME / CAPTURE is held.
+    They are not XInput buttons, so kb_merge_full cannot carry them; the caller passes them
+    to build_frame."""
+    if kb is None:
+        return False, False
+    kmap = get_kb_map()
+    held = set(kb["keys"]) | {b for b in ("lmb", "rmb") if kb[b]}
+    funcs = {kmap.get(k) for k in held}
+    return "HOME" in funcs, "CAPTURE" in funcs
+
+
+# legacy entry points kept so nothing else breaks (GUI no longer uses these)
+def kb_merge(gp, keys):
+    kb = {"keys": keys, "rx": 0.0, "ry": 0.0, "lmb": False, "rmb": False}
+    return kb_merge_full(gp, kb)
+
+
 # ------------------------------------------------------------ main loop ---
 class Status:
     """thread-safe view of the device's $S flags"""
