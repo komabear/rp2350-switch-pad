@@ -115,7 +115,7 @@ def keep_process_responsive():
         pass
 
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 
 SLOTS = 4
 KEEPALIVE_S = 30  # idle seconds before a keep-alive nudge

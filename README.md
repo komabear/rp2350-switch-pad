@@ -105,7 +105,24 @@ Discord or OBS.
   drawn (nothing queues up), and frames go to the screen through a GPU renderer with vsync. The
   audio runs in its own helper process with a small buffer and clock-drift compensation, so video
   load can never make it crackle.
-- **Keys in the window:** `f` fullscreen, `m` mute, mouse wheel or Up/Down = volume, `q`/`Esc` close.
+- **Keys in the window:** `f` fullscreen, `m` mute, mouse wheel, `+`/`-` or Up/Down = volume,
+  `q`/`Esc` close (with keyboard control on, `q` and the arrow keys go to the pad instead).
+- **Keyboard and mouse as a gamepad** (off by default, remembered): tick *Keyboard/mouse -> gamepad
+  (capture window)* in the GUI, and while the capture window has focus your keys reach the Switch as
+  pad input, merged with any real pad:
+
+  | Pad | Keys | | Pad | Keys |
+  |---|---|---|---|---|
+  | Left stick | `W` `A` `S` `D` | | D-pad | arrow keys |
+  | A / B / X / Y | `K` / `L` / `J` / `I` | | L / R | `Q` / `E` |
+  | ZL / ZR | `U` / `O` | | Minus / Plus | `1` / `2` |
+  | L3 / R3 | `,` / `.` | | Home / Capture | `H` / `G` |
+  | Right stick | mouse movement | | A / B | left / right mouse button |
+
+  *Remap keys...* binds any function to a letter, digit, arrow key, comma, period or mouse button
+  (click the function, then press the key; right-click to unbind; `m` and `f` stay the window's).
+  The profile list next to it keeps several layouts (*Save as*, *Duplicate*, *Rename*, *Del*). Held
+  keys are released on the pad when the window loses focus.
 - **Volume:** a slider in the GUI (0–100%, remembered, changes the open window live). 10% is the
   card's level unchanged and 100% is a 10× boost, with a soft limiter against harsh clipping. The
   card's audio can arrive very quiet because of **Windows' own recording level** for it (it was 17%
@@ -116,7 +133,7 @@ Discord or OBS.
   shows "Waiting for the capture card...".
 - **No-signal detection:** when the card is stuck sending its own "no valid video signal" picture
   (static vertical stripes), the window explains it instead of showing the stripes and tells you what
-  to do (see below).
+  to do (see below). A plain white, grey or black game screen is not mistaken for it.
 - A diagnostic log is written to `%APPDATA%\mayflash_switch2_controller\capture.log` (problems,
   recoveries, a heartbeat every minute).
 

@@ -1,8 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.1.6 - 2026-11-07
 
+- **Keyboard and mouse as a gamepad** (new, off by default). Tick *Keyboard/mouse -> gamepad (capture
+  window)* in the GUI and the keys you press in the capture window reach the Switch as pad input,
+  merged with any real pad. Defaults: WASD left stick, arrow keys d-pad, K/L/J/I = A/B/X/Y, Q/E = L/R,
+  U/O = ZL/ZR, 1/2 = Minus/Plus, `,`/`.` = L3/R3, H = Home, G = Capture; mouse movement = right
+  stick, left/right mouse button = A/B. *Remap keys...* binds any function to a letter, digit, arrow
+  key, comma, period or mouse button, and named profiles keep several layouts. While it is on, Q and
+  the arrow keys belong to the pad: close the window with Esc, set the volume with the mouse wheel or
+  +/-. Keys are released on the pad when the window loses focus.
+- **Capture window: plain game screens are no longer taken for "no signal".** A white, grey or dark
+  screen (for example Ocarina of Time's cutscene text screens) passed the check for the card's
+  "no valid video signal" picture, so the window hid the scene behind the warning and reopened the
+  card. The pattern now also has to show its vertical stripes.
+- The GUI remembers the controller picker (Auto or the picked slot) and *Send inputs to Switch*.
 - README: states that the PC app is Windows only and what a Linux/macOS port would need.
+- No firmware changes (`bridge.uf2` is identical to 0.1.0 - 0.1.5).
 
 ## 0.1.5 - 2026-10-17
 
