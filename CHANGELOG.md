@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Remap dialog fixes: the *Mouse movement* row shows that it is on and a click turns it on or off;
+  unbinding or moving a key redraws every affected row at once; right-click unbind no longer leaves a
+  stray `null` entry in the settings (one left by 0.1.6 is dropped on the next start); *Save as* and
+  *Duplicate* ask before replacing an existing profile.
+
 ## 0.1.6 - 2026-11-07
 
 - **Keyboard and mouse as a gamepad** (new, off by default). Tick *Keyboard/mouse -> gamepad (capture

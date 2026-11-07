@@ -226,6 +226,7 @@ DEFAULT_KB_MAP = {
     "w": "LS_UP", "a": "LS_LEFT", "s": "LS_DOWN", "d": "LS_RIGHT",
     "up": "UP", "down": "DOWN", "left": "LEFT", "right": "RIGHT",
     "lmb": "A", "rmb": "B",
+    "mouse_move": "MOUSE_MOVE",  # mouse movement -> right stick (the remap dialog toggles it)
 }
 
 _kb_map = None  # None = use DEFAULT_KB_MAP
@@ -237,14 +238,19 @@ def get_kb_map():
 
 
 def set_binding(physical, func):
-    """Bind a physical key/mouse name to a function (or None = unbind).
+    """Bind a physical key/mouse name to a function (func None = unbind that key;
+    physical None = unbind whatever is bound to func).
     Enforces one function per binding: another physical name already bound to
     `func` is moved to (none). Saves to settings via the gui save_settings hook
     if installed (set_kb_map_hook)."""
     global _kb_map
     if _kb_map is None:
         _kb_map = dict(DEFAULT_KB_MAP)
-    if func is None or func == "(none)":
+    if physical is None:
+        for p, f in list(_kb_map.items()):
+            if f == func:
+                _kb_map[p] = None
+    elif func is None or func == "(none)":
         _kb_map[physical] = None
     else:
         for p, f in list(_kb_map.items()):
@@ -284,8 +290,8 @@ def load_kb_map(saved):
 
     if isinstance(saved, dict):
         for p, f in saved.items():
-            if not _known_physical(p):
-                continue  # typo or stale entry: drop
+            if p in (None, "null") or not _known_physical(p):
+                continue  # typo or stale entry ("null": left by unbinding in 0.1.6): drop
             if f is None or f == "(none)":
                 merged[p] = None
             elif f in FUNC_TO_XINPUT or f in FUNC_TO_DPAD or f in FUNC_TO_STICK \

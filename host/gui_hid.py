@@ -20,7 +20,7 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 try:
     import hid
@@ -711,6 +711,8 @@ class App:
         if not name:
             return
         profiles, _ = load_profiles()
+        if not self._confirm_replace(name, profiles):
+            return
         profiles[name] = dict(bridge.get_kb_map())
         save_profiles(profiles, name)
         self.profile_refresh(keep_current=False)
@@ -743,6 +745,12 @@ class App:
         win.wait_window()
         return result[0] if result else None
 
+    def _confirm_replace(self, name, profiles):
+        """True when `name` is free, or the user agrees to overwrite that profile."""
+        return name not in profiles or messagebox.askyesno(
+            "Replace profile", f"A profile named \"{name}\" already exists. Replace it?",
+            parent=self.root)
+
     def profile_duplicate(self):
         """Clone the selected profile under a new name (user prompted, default
         name '<selected> copy'), then switch to the clone."""
@@ -753,7 +761,7 @@ class App:
         while name in profiles:
             name, i = f"{src} copy {i}", i + 1
         name = self._prompt_name("Duplicate profile", initial=name)
-        if not name or name == src:
+        if not name or name == src or not self._confirm_replace(name, profiles):
             return
         profiles[name] = profiles.get(src) or dict(bridge.DEFAULT_KB_MAP)
         save_profiles(profiles, name)
@@ -831,6 +839,7 @@ class App:
             win, wraplength=430, justify="left", foreground="#555555",
             text=("Click a binding, then press the new key (or click the mouse "
                   "button you want). Right-click a binding to unbind, Esc to cancel. "
+                  "Click Mouse movement to turn it on or off. "
                   "Reserved in the capture window: Esc = close, M = mute, F = fullscreen. "
                   "While keyboard control is on, Q and the arrow keys go to the pad."),
         ).pack(anchor="w", padx=10, pady=(8, 4))
@@ -850,7 +859,10 @@ class App:
             txt = self.key_label(phys)
             b = ttk.Button(grid, text=txt, width=13)
             b.grid(row=r, column=c * 2 + 1, sticky="w", padx=(6, 14), pady=1)
-            b.bind("<Button-1>", lambda e, f=func, btn=b: self.remap_listen(f, btn))
+            if func == "MOUSE_MOVE":  # not a key: a click turns it on or off
+                b.bind("<Button-1>", lambda e: self.remap_toggle_mouse())
+            else:
+                b.bind("<Button-1>", lambda e, f=func, btn=b: self.remap_listen(f, btn))
             b.bind("<Button-3>", lambda e, f=func, btn=b: self.remap_set(f, None, btn))
             self.remap_rows[func] = (b, phys)
         ttk.Button(win, text="Reset to defaults", command=self.remap_reset).pack(
@@ -915,13 +927,15 @@ class App:
         return None  # unsupported keys (F-keys etc.) are ignored
 
     def remap_set(self, func, phys, btn, from_event=False):
-        bridge.set_binding(phys, func)  # releases conflicts, fires the save hook
-        # a physical name can only serve one function; clear any other row that
-        # showed it before (dialog-level consistency)
-        for f2, (b2, p2) in self.remap_rows.items():
-            if f2 != func and p2 == phys:
-                self.remap_rows[f2] = (b2, None)
-        self.remap_rows[func] = (btn, phys)
+        bridge.set_binding(phys, func)  # phys None = unbind; releases conflicts, fires the save hook
+        # redraw every row: a key that moved here leaves its old row showing (none)
+        for f2 in self.remap_rows:
+            self.remap_refresh_row(f2)
+
+    def remap_toggle_mouse(self):
+        on = bridge.get_kb_map().get("mouse_move") == "MOUSE_MOVE"
+        bridge.set_binding("mouse_move", None if on else "MOUSE_MOVE")
+        self.remap_refresh_row("MOUSE_MOVE")
 
     def remap_refresh_row(self, func):
         if not (self.remap_win and self.remap_win.winfo_exists()):
