@@ -147,10 +147,14 @@ def clog(msg):
 
 def is_error_pattern(f):
     """True for the card's own 'no valid video signal' picture: vertical stripes, i.e. every row
-    identical. A real game frame never has that (a plain black frame is handled separately)."""
+    identical AND each row varying from left to right. Both are needed: games fade to a plain
+    colour (Ocarina of Time's white and dark-grey cutscene screens), and a flat screen also has
+    identical rows - but no stripes. A plain black frame is handled separately."""
     import numpy as np
-    rows = f[::108].astype(np.int16)
-    return float(f[::64, ::64].mean()) > 3.0 and float(np.abs(rows - rows[0]).mean()) < 0.5
+    rows = f[::27].astype(np.int16)  # 40 rows of a 1080p frame: small text rarely falls between them all
+    if float(np.abs(rows - rows[0]).mean()) >= 0.5:
+        return False  # the rows differ: a real picture
+    return float(rows[0].std(axis=0).max()) > 4.0  # stripes; a flat colour is ~0
 
 
 def grab_loop(cap, vidx, w, h, fps, slot, stop, status):
