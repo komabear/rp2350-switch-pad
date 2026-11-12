@@ -120,7 +120,8 @@ Discord or OBS.
   | Right stick | mouse movement | | A / B | left / right mouse button |
 
   *Remap keys...* binds any function to a letter, digit, arrow key, comma, period or mouse button
-  (click the function, then press the key; right-click to unbind; `m` and `f` stay the window's).
+  (click the function, then press the key; right-click to unbind; *Mouse movement* is switched on
+  and off with a click; `m` and `f` stay the window's).
   The profile list next to it keeps several layouts (*Save as*, *Duplicate*, *Rename*, *Del*). Held
   keys are released on the pad when the window loses focus.
 - **Volume:** a slider in the GUI (0–100%, remembered, changes the open window live). 10% is the

@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.1.7 - 2026-11-12
 
 - Remap dialog fixes: the *Mouse movement* row shows that it is on and a click turns it on or off;
   unbinding or moving a key redraws every affected row at once; right-click unbind no longer leaves a
   stray `null` entry in the settings (one left by 0.1.6 is dropped on the next start); *Save as* and
   *Duplicate* ask before replacing an existing profile.
+- No firmware changes (`bridge.uf2` is identical to 0.1.0 - 0.1.6).
 
 ## 0.1.6 - 2026-11-07
 
