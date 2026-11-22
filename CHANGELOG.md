@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.8 - 2026-11-21
 
 - **Waveshare RP2350-USB-CM support.** The CM is the RP2350-USB-C with a Type-C plug as its PIO-USB
   port, and its D+/D- sit on GPIO13/GPIO12 (swapped compared with the RP2350-USB-C). The firmware
