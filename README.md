@@ -3,8 +3,8 @@
 **Version 0.1.5** - MIT licensed, see [CHANGELOG.md](CHANGELOG.md).
 
 Play your Nintendo Switch 2 remotely with friends over [Parsec](https://parsec.app). A Waveshare
-**RP2350-USB-C** board pretends to be a wired PowerA Switch controller, and a PC tool streams a
-gamepad to it. A built-in capture window shows the Switch's screen (video and audio) from an HDMI
+**RP2350-USB-C** (or **RP2350-USB-CM**) board pretends to be a wired PowerA Switch controller, and a
+PC tool streams a gamepad to it. A built-in capture window shows the Switch's screen (video and audio) from an HDMI
 capture card, ready to share. **Tested end to end with Parsec guests.** The PC app is **Windows only** for now
 (see [Platforms](#platforms)).
 
@@ -35,15 +35,21 @@ The Switch sees a normal licensed wired controller (PowerA "BDA NSW wired contro
 
 The GitHub releases page has `rp2350-switch-pad-v<version>-windows.zip`: the GUI as a Windows exe
 (unzip and run `rp2350-switch-pad.exe`; Windows SmartScreen may warn because it is unsigned) plus
-`bridge.uf2`, the board firmware, the README and the changelog. Flash the UF2 once (see
-[Flash](#flash)), then follow the [daily routine](#daily-routine).
+the board firmware (`bridge.uf2` for the RP2350-USB-C, `bridge_cm.uf2` for the RP2350-USB-CM), the
+README and the changelog. Flash the UF2 for your board once (see [Flash](#flash)), then follow the
+[daily routine](#daily-routine).
 
 The capture window uses `ffmpeg` only to list device names (`winget install Gyan.FFmpeg`).
 
 ## Hardware
 
-- Waveshare RP2350-USB-C (two Type-C ports: **native/programming** and **PIO-USB**).
-- Two **data-capable** USB cables for the board (some charge-only cables fail silently).
+- Waveshare RP2350-USB-C (two Type-C ports: **native/programming** and **PIO-USB**), **or** the
+  Waveshare RP2350-USB-CM, the same board with a Type-C **plug** as its PIO-USB port. The CM's plug
+  goes straight into a USB-C port of the PC, so it needs only the native cable; wherever this README
+  says "PIO cable", read "the board's plug". Each board has its own firmware image (`bridge.uf2` /
+  `bridge_cm.uf2`, see [Flash](#flash)): the two wire D+ and D- of the PIO-USB port to swapped GPIOs.
+- Two **data-capable** USB cables for the board (one for the RP2350-USB-CM; some charge-only cables
+  fail silently).
 - Switch 2 dock, an HDMI capture card (UGREEN HDMI Capture tested, 1080p60), a **Windows 10/11 PC**.
 
 ## Daily routine
@@ -55,7 +61,7 @@ Connect:
 1. Unplug everything from the board.
 2. Plug the board's **native** Type-C (the programming port) into a **dock USB port**. Wait ~10 s;
    the Switch sees a wired pad.
-3. Plug the board's **PIO-USB** Type-C into the **PC**.
+3. Plug the board's **PIO-USB** Type-C into the **PC** (RP2350-USB-CM: plug the board itself in).
 4. Right away start the GUI. All status rows should turn green. Keep it open while playing.
 
 Disconnect:
@@ -196,13 +202,17 @@ cmake -S fw -B fw/build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build fw/build
 ```
 
-(or set `PICO_SDK_PATH`). Options: `-DSELFTEST=ON` makes the board cycle the d-pad by itself, so you
-can test it on the dock without a PC; `-DDEFAULT_IDENTITY=n` picks the pad identity (3 = PowerA).
+(or set `PICO_SDK_PATH`). The build makes one image per board: `fw/build/bridge.uf2` (RP2350-USB-C,
+PIO-USB D+ = GPIO12, D- = GPIO13) and `fw/build/bridge_cm.uf2` (RP2350-USB-CM, D+ = GPIO13,
+D- = GPIO12). Options: `-DSELFTEST=ON` makes the board cycle the d-pad by itself, so you can test it on
+the dock without a PC; `-DDEFAULT_IDENTITY=n` picks the pad identity (3 = PowerA).
 
 ### Flash
 
-Plug the **native** port into the PC, hold **BOOT**, tap **RST**, copy `fw/build/bridge.uf2` to the
-`RP2350` drive. Unplug the board afterwards and follow the daily routine.
+Plug the **native** port into the PC, hold **BOOT**, tap **RST**, copy the image for your board to the
+`RP2350` drive: `bridge.uf2` for the **RP2350-USB-C**, `bridge_cm.uf2` for the **RP2350-USB-CM**
+(`fw/build/` when you built it yourself). The wrong image does no harm, but the PC never sees the
+PIO-USB link; flash the right one. Unplug the board afterwards and follow the daily routine.
 
 ### Build the Windows bundle
 

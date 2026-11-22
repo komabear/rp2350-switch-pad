@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Waveshare RP2350-USB-CM support.** The CM is the RP2350-USB-C with a Type-C plug as its PIO-USB
+  port, and its D+/D- sit on GPIO13/GPIO12 (swapped compared with the RP2350-USB-C). The firmware
+  build now makes two images, `bridge.uf2` for the RP2350-USB-C and `bridge_cm.uf2` for the
+  RP2350-USB-CM, and the release zip ships both. `bridge_cm.uf2` has not been tested on a CM board
+  yet.
+- No change for the RP2350-USB-C: `bridge.uf2` is identical to 0.1.0 - 0.1.7.
+- GUI hints say "PIO-USB port" instead of "PIO cable", since the CM has no PIO cable.
+
 ## 0.1.7 - 2026-11-12
 
 - Remap dialog fixes: the *Mouse movement* row shows that it is on and a click turns it on or off;

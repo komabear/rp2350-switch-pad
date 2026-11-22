@@ -6,7 +6,8 @@ Streams one PC controller (XInput) to the board over the PIO-USB link; the
 board's native port presents it to the Switch as a PowerA pad.
 
 Setup order (the PIO link wedges if the native cable is changed while up):
-  1. board native Type-C -> Switch dock   2. board PIO Type-C -> this PC
+  1. board native Type-C -> Switch dock   2. board PIO Type-C (cable, or the plug of an
+     RP2350-USB-CM) -> this PC
   3. run this GUI
 
   py gui_hid.py
@@ -533,7 +534,7 @@ class App:
         self.texts = {}
         rows = [
             ("pad", "Controller on this PC"),
-            ("link", "Link to board (PIO-USB cable)"),
+            ("link", "Link to board (PIO-USB port)"),
             ("switch", "Switch has detected the pad"),
             ("flow", "Inputs flowing PC -> board"),
         ]
@@ -1143,10 +1144,11 @@ class App:
                  "see the pad. Close this window, unplug both cables, then: native -> DOCK "
                  "first (wait 10 s), PIO -> PC last.")
         elif not link:
-            h = "Plug the board's PIO-USB Type-C cable into this PC."
+            h = ("Plug the board's PIO-USB Type-C into this PC (with a cable, or directly with the "
+                 "RP2350-USB-CM's plug).")
         elif stuck:
             h = ("The link is not responding (it goes idle when nothing talks to it). Unplug ONLY the "
-                 "PIO cable (the one to this PC), wait 3 s, plug it back in; this window reconnects by "
+                 "PIO-USB side (the one to this PC), wait 3 s, plug it back in; this window reconnects by "
                  "itself. If that does not help, unplug both cables and redo the connect order.")
         elif board is not None and age <= 3.0 and not board["mounted"]:
             h = ("The Switch has not detected the pad. If the console is asleep this is normal: "

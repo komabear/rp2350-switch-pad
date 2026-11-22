@@ -13,8 +13,10 @@
  *                                               |
  *                                             Switch 2 dock
  *
- * PIO-USB pinout (board wiring, from Waveshare's pio_usb_configuration.h):
- *   D+ = GPIO12, D- = GPIO13, pinout DPDM (DM = DP+1)
+ * PIO-USB pinout (board wiring, from Waveshare's pio_usb_configuration.h;
+ * the build picks the board, see fw/CMakeLists.txt):
+ *   RP2350-USB-C  (bridge.uf2):    D+ = GPIO12, D- = GPIO13, DPDM (DM = DP+1)
+ *   RP2350-USB-CM (bridge_cm.uf2): D+ = GPIO13, D- = GPIO12, DMDP (DM = DP-1)
  *
  * Native USB: CDC serial only (device 2E8A:000A). We deliberately do NOT
  * composite XInput here: the Windows Xbox 360 driver binds at device level
